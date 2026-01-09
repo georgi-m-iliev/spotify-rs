@@ -1,0 +1,9 @@
+[package]
+name = "spotify-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+librespot = "0.8.0"
+ratatui = "0.30.0"
+rspotify = "0.15.3"
