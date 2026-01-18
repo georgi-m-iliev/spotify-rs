@@ -1,5 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use librespot::metadata::audio::UniqueFields;
+use librespot::playback::player::{PlayerEvent, PlayerEventChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -53,11 +55,7 @@ impl AppController {
             } else {
                 spotify.play().await?;
             }
-
-            // Refresh state after toggling
-            drop(model);
-            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-            self.refresh_playback().await?;
+            // Note: State will be updated via player events, no need to poll
         }
 
         Ok(())
@@ -69,11 +67,7 @@ impl AppController {
         if let Some(spotify) = &model.spotify {
             spotify.next_track().await?;
         }
-
-        // Refresh after action
-        drop(model);
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        self.refresh_playback().await?;
+        // Note: State will be updated via player events
 
         Ok(())
     }
@@ -84,15 +78,12 @@ impl AppController {
         if let Some(spotify) = &model.spotify {
             spotify.previous_track().await?;
         }
-
-        // Refresh after action
-        drop(model);
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        self.refresh_playback().await?;
+        // Note: State will be updated via player events
 
         Ok(())
     }
 
+    /// Refresh playback state from Spotify API (fallback/initial sync)
     pub async fn refresh_playback(&self) -> Result<()> {
         let model = self.model.lock().await;
 
@@ -107,23 +98,77 @@ impl AppController {
         Ok(())
     }
 
-    pub async fn start_playback_monitor(&self) {
+    /// Start listening to librespot player events for real-time playback updates
+    pub fn start_player_event_listener(&self, mut event_channel: PlayerEventChannel) {
         let model = self.model.clone();
 
         tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
+            while let Some(event) = event_channel.recv().await {
                 let model_guard = model.lock().await;
+
                 if model_guard.should_quit().await {
                     break;
                 }
 
-                if let Some(spotify) = &model_guard.spotify {
-                    if let Ok(Some(playback)) = spotify.get_current_playback().await {
-                        let track = TrackInfo::from_playback(&playback);
-                        let is_playing = playback.is_playing;
-                        model_guard.update_playback_state(track, is_playing).await;
+                match event {
+                    PlayerEvent::Playing { position_ms, .. } => {
+                        model_guard.update_playback_position(position_ms, true).await;
+                    }
+                    PlayerEvent::Paused { position_ms, .. } => {
+                        model_guard.update_playback_position(position_ms, false).await;
+                    }
+                    PlayerEvent::PositionChanged { position_ms, .. } => {
+                        // Periodic position update - keep current playing state
+                        let is_playing = model_guard.is_playing().await;
+                        model_guard.update_playback_position(position_ms, is_playing).await;
+                    }
+                    PlayerEvent::Seeked { position_ms, .. } => {
+                        let is_playing = model_guard.is_playing().await;
+                        model_guard.update_playback_position(position_ms, is_playing).await;
+                    }
+                    PlayerEvent::TrackChanged { audio_item } => {
+                        // Extract artist and album from unique_fields based on content type
+                        let (artist, album) = match &audio_item.unique_fields {
+                            UniqueFields::Track { artists, album, .. } => {
+                                let artist_name = artists
+                                    .0
+                                    .first()
+                                    .map(|a| a.name.clone())
+                                    .unwrap_or_default();
+                                (artist_name, album.clone())
+                            }
+                            UniqueFields::Episode { show_name, .. } => {
+                                (show_name.clone(), "Podcast".to_string())
+                            }
+                            UniqueFields::Local { artists, album, .. } => {
+                                let artist_name = artists.clone().unwrap_or_default();
+                                let album_name = album.clone().unwrap_or_default();
+                                (artist_name, album_name)
+                            }
+                        };
+
+                        let track = TrackInfo {
+                            name: audio_item.name.clone(),
+                            artist,
+                            album,
+                            duration_ms: audio_item.duration_ms,
+                            progress_ms: 0,
+                        };
+                        model_guard.update_track_info(track).await;
+                    }
+                    PlayerEvent::Stopped { .. } => {
+                        model_guard.update_playback_position(0, false).await;
+                    }
+                    PlayerEvent::Loading { position_ms, .. } => {
+                        // Track is loading, update position
+                        model_guard.update_playback_position(position_ms, false).await;
+                    }
+                    PlayerEvent::EndOfTrack { .. } => {
+                        // Track ended, will transition to next track
+                        model_guard.set_playing(false).await;
+                    }
+                    _ => {
+                        // Ignore other events (volume, session, shuffle, repeat, etc.)
                     }
                 }
             }

@@ -16,3 +16,18 @@ MVP Version:
     We should be able to use sessions and require re-authentication only when necessary.
 * Basic playback controls - play, pause, next, previous
 * Display current track info
+
+
+Future features:
+
+* Search for tracks, albums, artists
+* Browse playlists, albums, artists
+* Track - play or add to queue
+* Album, Artist - play
+* Browse user's library
+* View queue - remove tracks from queue
+* Volume control
+* Repeat, shuffle
+* Keyboard shortcuts for common actions
+* Homepage with recommended playlists, new releases, etc.
+* Select different devices for playback

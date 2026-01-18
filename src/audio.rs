@@ -1,13 +1,14 @@
- use crate::auth::AuthResult;
+use crate::auth::AuthResult;
 use anyhow::Result;
 use librespot::connect::{ConnectConfig, Spirc};
 use librespot::core::config::SessionConfig;
 use librespot::core::session::Session;
 use librespot::playback::config::{AudioFormat, Bitrate, PlayerConfig};
 use librespot::playback::mixer::{MixerConfig, NoOpVolume};
-use librespot::playback::player::Player;
+use librespot::playback::player::{Player, PlayerEventChannel};
 use librespot::playback::{audio_backend, mixer};
 use std::sync::Arc;
+use std::time::Duration;
 
 const DEVICE_NAME: &str = "Spotify-RS";
 
@@ -29,6 +30,8 @@ impl AudioPlayer {
 
         let player_config = PlayerConfig {
             bitrate: Bitrate::Bitrate320,
+            // Enable position updates every 500ms for smooth progress tracking
+            position_update_interval: Some(Duration::from_millis(500)),
             ..Default::default()
         };
         let audio_format = AudioFormat::default();
@@ -72,6 +75,11 @@ impl AudioPlayer {
             session,
             spirc,
         })
+    }
+
+    /// Get the player event channel for receiving playback state updates
+    pub fn get_player_event_channel(&self) -> PlayerEventChannel {
+        self.player.get_player_event_channel()
     }
 
     fn get_device_id() -> String {

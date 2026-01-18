@@ -68,22 +68,24 @@ impl AppView {
     }
 
     fn render_progress(frame: &mut Frame, area: Rect, track: &TrackInfo) {
-        let progress = if track.duration_ms > 0 {
-            (track.progress_ms as f64 / track.duration_ms as f64) * 100.0
-        } else {
-            0.0
-        };
-
         let time_str = format!(
             "{} / {}",
             Self::format_duration(track.progress_ms),
             Self::format_duration(track.duration_ms)
         );
 
+
+        // Calculate precise position in the bar
+        let progress_ratio = if track.duration_ms > 0 {
+            (track.progress_ms as f64 / track.duration_ms as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL))
+            .block(Block::default().borders(Borders::ALL).title("Progress"))
             .gauge_style(Style::default().fg(Color::Green))
-            .percent(progress as u16)
+            .ratio(progress_ratio)
             .label(time_str);
 
         frame.render_widget(gauge, area);

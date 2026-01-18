@@ -32,6 +32,9 @@ async fn main() -> Result<()> {
 
     let player = AudioPlayer::new(auth_result.clone()).await?;
 
+    // Get player event channel for real-time playback updates
+    let player_event_channel = player.get_player_event_channel();
+
     // Step 2: Authenticate with rspotify for API control
     let rspotify_client = setup_rspotify(auth_result.rspotify_token).await?;
 
@@ -65,10 +68,10 @@ async fn main() -> Result<()> {
     let model = Arc::new(Mutex::new(app_model));
     let controller = AppController::new(model.clone());
 
-    // Start background playback monitor
-    controller.start_playback_monitor().await;
+    // Start listening to librespot player events for real-time updates
+    controller.start_player_event_listener(player_event_channel);
 
-    // Initial refresh
+    // Initial refresh from Spotify API to get current track info
     controller.refresh_playback().await?;
 
     // Run the app
@@ -128,8 +131,8 @@ async fn run_app(
             AppView::render(f, &track, is_playing);
         })?;
 
-        // Handle input
-        if event::poll(Duration::from_millis(100))? {
+        // Handle input with shorter poll time for smoother UI updates
+        if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if let Err(e) = controller.handle_key_event(key).await {
                     // Log error but continue running
