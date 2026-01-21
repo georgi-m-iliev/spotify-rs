@@ -63,6 +63,8 @@ pub struct UiState {
     pub shuffle: bool,
     pub repeat: RepeatState,
     pub volume: u8,
+    pub error_message: Option<String>,
+    pub error_timestamp: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +98,8 @@ impl Default for UiState {
             shuffle: false,
             repeat: RepeatState::Off,
             volume: 100,
+            error_message: None,
+            error_timestamp: None,
         }
     }
 }
@@ -442,5 +446,28 @@ impl AppModel {
     pub async fn backspace_search(&self) {
         let mut state = self.ui_state.lock().await;
         state.search_query.pop();
+    }
+
+    pub async fn set_error(&self, message: String) {
+        let mut state = self.ui_state.lock().await;
+        state.error_message = Some(message);
+        state.error_timestamp = Some(Instant::now());
+    }
+
+    pub async fn clear_error(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.error_message = None;
+        state.error_timestamp = None;
+    }
+
+    /// Check if error should be auto-cleared (after 5 seconds)
+    pub async fn auto_clear_old_errors(&self) {
+        let mut state = self.ui_state.lock().await;
+        if let Some(timestamp) = state.error_timestamp {
+            if timestamp.elapsed().as_secs() > 5 {
+                state.error_message = None;
+                state.error_timestamp = None;
+            }
+        }
     }
 }

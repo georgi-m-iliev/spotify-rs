@@ -61,6 +61,10 @@ impl AppController {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 model.set_should_quit(true).await;
             }
+            KeyCode::Esc => {
+                // Clear error message if one is displayed
+                model.clear_error().await;
+            }
             KeyCode::Tab => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                     model.cycle_section_backward().await;
@@ -79,77 +83,110 @@ impl AppController {
             }
             KeyCode::Char(' ') => {
                 drop(model); // Release lock before async operation
-                self.toggle_playback().await?;
+                self.toggle_playback().await;
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 drop(model);
-                self.next_track().await?;
+                self.next_track().await;
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 drop(model);
-                self.previous_track().await?;
+                self.previous_track().await;
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 drop(model);
-                self.refresh_playback().await?;
+                self.refresh_playback().await;
             }
             _ => {}
         }
         Ok(())
     }
 
-    async fn toggle_playback(&self) -> Result<()> {
+    async fn toggle_playback(&self) {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
             let is_playing = model.is_playing().await;
 
-            if is_playing {
-                spotify.pause().await?;
+            let result = if is_playing {
+                spotify.pause().await
             } else {
-                spotify.play().await?;
+                spotify.play().await
+            };
+
+            if let Err(e) = result {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
             }
             // Note: State will be updated via player events, no need to poll
         }
-
-        Ok(())
     }
 
-    async fn next_track(&self) -> Result<()> {
+    async fn next_track(&self) {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            spotify.next_track().await?;
+            if let Err(e) = spotify.next_track().await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            }
         }
         // Note: State will be updated via player events
-
-        Ok(())
     }
 
-    async fn previous_track(&self) -> Result<()> {
+    async fn previous_track(&self) {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            spotify.previous_track().await?;
+            if let Err(e) = spotify.previous_track().await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            }
         }
         // Note: State will be updated via player events
-
-        Ok(())
     }
 
     /// Refresh playback state from Spotify API (fallback/initial sync)
-    pub async fn refresh_playback(&self) -> Result<()> {
+    pub async fn refresh_playback(&self) {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            if let Some(playback) = spotify.get_current_playback().await? {
-                let track = TrackInfo::from_playback(&playback);
-                let is_playing = playback.is_playing;
-                model.update_playback_state(track, is_playing).await;
+            match spotify.get_current_playback().await {
+                Ok(Some(playback)) => {
+                    let track = TrackInfo::from_playback(&playback);
+                    let is_playing = playback.is_playing;
+                    model.update_playback_state(track, is_playing).await;
+                }
+                Ok(None) => {
+                    // No active playback, this is fine
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
             }
         }
+    }
 
-        Ok(())
+    /// Format error messages to be user-friendly
+    fn format_error(error: &anyhow::Error) -> String {
+        let error_str = error.to_string();
+
+        // Handle common Spotify API errors
+        if error_str.contains("404") {
+            "No active device found. Start playing on Spotify and try again.".to_string()
+        } else if error_str.contains("403") {
+            "Action forbidden. Check your Spotify Premium status.".to_string()
+        } else if error_str.contains("401") {
+            "Authentication expired. Please restart the app.".to_string()
+        } else if error_str.contains("429") {
+            "Rate limited. Please wait a moment.".to_string()
+        } else if error_str.contains("Player command failed") {
+            "No active playback. Start playing a song first.".to_string()
+        } else {
+            // Generic error message
+            format!("Error: {}", error_str)
+        }
     }
 
     /// Start listening to librespot player events for real-time playback updates

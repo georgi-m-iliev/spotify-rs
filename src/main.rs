@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     controller.start_player_event_listener(player_event_channel);
 
     // Initial refresh from Spotify API to get current track info
-    controller.refresh_playback().await?;
+    controller.refresh_playback().await;
 
     // Run the app
     let res = run_app(&mut terminal, model.clone(), controller).await;
@@ -119,6 +119,10 @@ async fn run_app(
         // Get current state
         let (track, is_playing, ui_state, should_quit) = {
             let model_guard = model.lock().await;
+            
+            // Auto-clear old errors (after 5 seconds)
+            model_guard.auto_clear_old_errors().await;
+            
             (
                 model_guard.get_track_info().await,
                 model_guard.is_playing().await,
@@ -135,10 +139,8 @@ async fn run_app(
         // Handle input with shorter poll time for smoother UI updates
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if let Err(e) = controller.handle_key_event(key).await {
-                    // Log error but continue running
-                    eprintln!("Error handling key event: {}", e);
-                }
+                // Errors are now handled internally, no need to log
+                let _ = controller.handle_key_event(key).await;
             }
         }
 

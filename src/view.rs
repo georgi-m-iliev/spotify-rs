@@ -29,6 +29,11 @@ impl AppView {
 
         // Bottom: Progress bar with track info and controls
         Self::render_progress_bar(frame, chunks[2], track, is_playing, ui_state);
+
+        // Error notification overlay (if there's an error)
+        if ui_state.error_message.is_some() {
+            Self::render_error_notification(frame, ui_state);
+        }
     }
 
     fn render_top_bar(frame: &mut Frame, area: Rect, ui_state: &UiState) {
@@ -264,5 +269,43 @@ impl AppView {
         let minutes = total_seconds / 60;
         let seconds = total_seconds % 60;
         format!("{}:{:02}", minutes, seconds)
+    }
+
+    fn render_error_notification(frame: &mut Frame, ui_state: &UiState) {
+        if let Some(ref error_msg) = ui_state.error_message {
+            let area = frame.area();
+
+            // Calculate centered popup size
+            let popup_width = error_msg.len().min(60) as u16 + 4;
+            let popup_height = 5;
+
+            let popup_x = area.width.saturating_sub(popup_width) / 2;
+            let popup_y = area.height.saturating_sub(popup_height) / 2;
+
+            let popup_area = Rect {
+                x: popup_x,
+                y: popup_y,
+                width: popup_width,
+                height: popup_height,
+            };
+
+            // Create error popup
+            let error_text = format!("⚠ {}", error_msg);
+            let error_widget = Paragraph::new(error_text)
+                .style(
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Red))
+                        .title(" Error ")
+                        .style(Style::default().bg(Color::Black)),
+                );
+
+            frame.render_widget(error_widget, popup_area);
+        }
     }
 }
