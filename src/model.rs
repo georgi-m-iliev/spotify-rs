@@ -1,14 +1,13 @@
+use std::sync::Arc;
 use anyhow::Result;
+use std::time::Instant;
+use tokio::sync::Mutex;
 use rspotify::{
     model::{CurrentPlaybackContext, PlayableItem},
     prelude::*,
     AuthCodeSpotify,
 };
-use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::Mutex;
 
-/// Active section for Tab navigation
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveSection {
     Search,
@@ -37,20 +36,17 @@ impl ActiveSection {
     }
 }
 
-/// Library items that can be selected
 #[derive(Clone, Debug)]
 pub struct LibraryItem {
     pub name: String,
 }
 
-/// Playlist item
 #[derive(Clone, Debug)]
 pub struct PlaylistItem {
     pub id: String,
     pub name: String,
 }
 
-/// UI state for the application
 #[derive(Clone)]
 pub struct UiState {
     pub active_section: ActiveSection,
@@ -59,10 +55,6 @@ pub struct UiState {
     pub library_selected: usize,
     pub playlists: Vec<PlaylistItem>,
     pub playlist_selected: usize,
-    pub device_name: String,
-    pub shuffle: bool,
-    pub repeat: RepeatState,
-    pub volume: u8,
     pub error_message: Option<String>,
     pub error_timestamp: Option<Instant>,
 }
@@ -94,10 +86,6 @@ impl Default for UiState {
                 PlaylistItem { id: "4".to_string(), name: "Playlist Example 4".to_string() },
             ],
             playlist_selected: 0,
-            device_name: "spotify-rs".to_string(),
-            shuffle: false,
-            repeat: RepeatState::Off,
-            volume: 100,
             error_message: None,
             error_timestamp: None,
         }
@@ -174,27 +162,25 @@ impl SpotifyClient {
 }
 
 #[derive(Clone, Debug)]
-pub struct TrackInfo {
+pub struct TrackMetadata {
     pub name: String,
     pub artist: String,
     pub album: String,
     pub duration_ms: u32,
-    pub progress_ms: u32,
 }
 
-impl Default for TrackInfo {
+impl Default for TrackMetadata {
     fn default() -> Self {
         Self {
             name: "No track playing".to_string(),
-            artist: "".to_string(),
-            album: "".to_string(),
+            artist: String::new(),
+            album: String::new(),
             duration_ms: 0,
-            progress_ms: 0,
         }
     }
 }
 
-impl TrackInfo {
+impl TrackMetadata {
     pub fn from_playback(playback: &CurrentPlaybackContext) -> Self {
         if let Some(item) = &playback.item {
             match item {
@@ -205,17 +191,11 @@ impl TrackInfo {
                         .map(|a| a.name.clone())
                         .unwrap_or_default();
 
-                    let album = track.album.name.clone();
-
                     Self {
                         name: track.name.clone(),
                         artist,
-                        album,
+                        album: track.album.name.clone(),
                         duration_ms: track.duration.num_milliseconds() as u32,
-                        progress_ms: playback
-                            .progress
-                            .map(|d| d.num_milliseconds() as u32)
-                            .unwrap_or(0),
                     }
                 }
                 PlayableItem::Episode(episode) => Self {
@@ -223,10 +203,6 @@ impl TrackInfo {
                     artist: episode.show.name.clone(),
                     album: "Podcast".to_string(),
                     duration_ms: episode.duration.num_milliseconds() as u32,
-                    progress_ms: playback
-                        .progress
-                        .map(|d| d.num_milliseconds() as u32)
-                        .unwrap_or(0),
                 },
                 PlayableItem::Unknown(_) => Self::default(),
             }
@@ -236,20 +212,15 @@ impl TrackInfo {
     }
 }
 
-/// Tracks playback state with local time-based progress calculation
 #[derive(Clone)]
-pub struct PlaybackState {
-    /// Position in milliseconds at the time of the last update
-    pub position_ms: u32,
-    /// When the position was last updated
-    pub last_update: Instant,
-    /// Whether playback is currently active
-    pub is_playing: bool,
-    /// Duration of the current track in milliseconds
-    pub duration_ms: u32,
+struct PlaybackTiming {
+    position_ms: u32,
+    last_update: Instant,
+    is_playing: bool,
+    duration_ms: u32,
 }
 
-impl Default for PlaybackState {
+impl Default for PlaybackTiming {
     fn default() -> Self {
         Self {
             position_ms: 0,
@@ -260,9 +231,8 @@ impl Default for PlaybackState {
     }
 }
 
-impl PlaybackState {
-    /// Calculate the current position based on elapsed time since last update
-    pub fn current_position_ms(&self) -> u32 {
+impl PlaybackTiming {
+    fn current_position_ms(&self) -> u32 {
         if self.is_playing && self.duration_ms > 0 {
             let elapsed = self.last_update.elapsed().as_millis() as u32;
             self.position_ms.saturating_add(elapsed).min(self.duration_ms)
@@ -271,42 +241,69 @@ impl PlaybackState {
         }
     }
 
-    /// Update position, only accepting updates that make sense
-    /// (prevents backwards jumps from network timing issues)
-    pub fn update_position(&mut self, new_position_ms: u32, is_playing: bool) {
+    fn update_position(&mut self, new_position_ms: u32, is_playing: bool) {
         let current_calculated = self.current_position_ms();
-
-        // Calculate how far off the new position is from our calculated position
         let diff = new_position_ms as i64 - current_calculated as i64;
 
-        // Always accept if:
-        // 1. Play state changed (pause/resume)
-        // 2. Significant backward jump (likely a seek) - more than 2 seconds back
-        // 3. Significant forward jump (likely a seek) - more than 2 seconds ahead
-        // 4. We were paused (no local time tracking was happening)
-        // 5. New position is within reasonable range and ahead (normal sync)
         let state_changed = self.is_playing != is_playing;
         let significant_backward_jump = diff < -2000;
         let significant_forward_jump = diff > 2000;
         let was_paused = !self.is_playing;
-
-        // For small differences, only accept if moving forward or very close
-        // This prevents the "back and forth" issue while still allowing correction
-        let acceptable_sync = diff >= -100; // Allow up to 100ms backward for timing jitter
+        let acceptable_sync = diff >= -100;
 
         if state_changed || significant_backward_jump || significant_forward_jump || was_paused || acceptable_sync {
             self.position_ms = new_position_ms;
             self.last_update = Instant::now();
         }
-        // Always update play state
         self.is_playing = is_playing;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaybackSettings {
+    pub device_name: String,
+    pub shuffle: bool,
+    pub repeat: RepeatState,
+    pub volume: u8,
+}
+
+impl Default for PlaybackSettings {
+    fn default() -> Self {
+        Self {
+            device_name: "spotify-rs".to_string(),
+            shuffle: false,
+            repeat: RepeatState::Off,
+            volume: 100,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaybackInfo {
+    pub track: TrackMetadata,
+    pub progress_ms: u32,
+    pub duration_ms: u32,
+    pub is_playing: bool,
+    pub settings: PlaybackSettings,
+}
+
+impl Default for PlaybackInfo {
+    fn default() -> Self {
+        Self {
+            track: TrackMetadata::default(),
+            progress_ms: 0,
+            duration_ms: 0,
+            is_playing: false,
+            settings: PlaybackSettings::default(),
+        }
     }
 }
 
 pub struct AppModel {
     pub spotify: Option<SpotifyClient>,
-    pub current_track: Arc<Mutex<TrackInfo>>,
-    pub playback_state: Arc<Mutex<PlaybackState>>,
+    track_metadata: Arc<Mutex<TrackMetadata>>,
+    playback_timing: Arc<Mutex<PlaybackTiming>>,
+    playback_settings: Arc<Mutex<PlaybackSettings>>,
     pub ui_state: Arc<Mutex<UiState>>,
     pub should_quit: Arc<Mutex<bool>>,
 }
@@ -315,8 +312,9 @@ impl AppModel {
     pub fn new() -> Self {
         Self {
             spotify: None,
-            current_track: Arc::new(Mutex::new(TrackInfo::default())),
-            playback_state: Arc::new(Mutex::new(PlaybackState::default())),
+            track_metadata: Arc::new(Mutex::new(TrackMetadata::default())),
+            playback_timing: Arc::new(Mutex::new(PlaybackTiming::default())),
+            playback_settings: Arc::new(Mutex::new(PlaybackSettings::default())),
             ui_state: Arc::new(Mutex::new(UiState::default())),
             should_quit: Arc::new(Mutex::new(false)),
         }
@@ -326,55 +324,64 @@ impl AppModel {
         self.spotify = Some(client);
     }
 
-    /// Update track metadata (name, artist, album, duration)
-    pub async fn update_track_info(&self, track: TrackInfo) {
-        let duration_ms = track.duration_ms;
-        *self.current_track.lock().await = track;
-
-        // Also update duration in playback state
-        let mut state = self.playback_state.lock().await;
-        state.duration_ms = duration_ms;
+    pub async fn update_device_name(&self, name: String) {
+        let mut settings = self.playback_settings.lock().await;
+        settings.device_name = name;
     }
 
-    /// Update playback position and playing state from librespot events
+    pub async fn update_track_info(&self, track: TrackMetadata) {
+        let duration_ms = track.duration_ms;
+        *self.track_metadata.lock().await = track;
+
+        let mut timing = self.playback_timing.lock().await;
+        timing.duration_ms = duration_ms;
+    }
+
     pub async fn update_playback_position(&self, position_ms: u32, is_playing: bool) {
-        let mut state = self.playback_state.lock().await;
-        state.update_position(position_ms, is_playing);
+        let mut timing = self.playback_timing.lock().await;
+        timing.update_position(position_ms, is_playing);
     }
 
-    /// Update just the playing/paused state
     pub async fn set_playing(&self, is_playing: bool) {
-        let mut state = self.playback_state.lock().await;
-        // When pausing/resuming, update the position to current calculated value
-        state.position_ms = state.current_position_ms();
-        state.is_playing = is_playing;
-        state.last_update = Instant::now();
+        let mut timing = self.playback_timing.lock().await;
+        timing.position_ms = timing.current_position_ms();
+        timing.is_playing = is_playing;
+        timing.last_update = Instant::now();
     }
 
-    /// Legacy method for backward compatibility with rspotify polling
-    pub async fn update_playback_state(&self, track: TrackInfo, is_playing: bool) {
-        let duration_ms = track.duration_ms;
-        let progress_ms = track.progress_ms;
-        *self.current_track.lock().await = track;
+    pub async fn update_from_playback_context(&self, playback: &CurrentPlaybackContext) {
+        let track = TrackMetadata::from_playback(playback);
+        let progress_ms = playback
+            .progress
+            .map(|d| d.num_milliseconds() as u32)
+            .unwrap_or(0);
+        let is_playing = playback.is_playing;
 
-        let mut state = self.playback_state.lock().await;
-        // For initial sync from API, always accept the position
-        state.position_ms = progress_ms;
-        state.duration_ms = duration_ms;
-        state.is_playing = is_playing;
-        state.last_update = Instant::now();
+        *self.track_metadata.lock().await = track.clone();
+
+        let mut timing = self.playback_timing.lock().await;
+        timing.position_ms = progress_ms;
+        timing.duration_ms = track.duration_ms;
+        timing.is_playing = is_playing;
+        timing.last_update = Instant::now();
     }
 
-    /// Get track info with current calculated progress
-    pub async fn get_track_info(&self) -> TrackInfo {
-        let mut track = self.current_track.lock().await.clone();
-        let state = self.playback_state.lock().await;
-        track.progress_ms = state.current_position_ms();
-        track
+    pub async fn get_playback_info(&self) -> PlaybackInfo {
+        let track = self.track_metadata.lock().await.clone();
+        let timing = self.playback_timing.lock().await;
+        let settings = self.playback_settings.lock().await.clone();
+
+        PlaybackInfo {
+            track,
+            progress_ms: timing.current_position_ms(),
+            duration_ms: timing.duration_ms,
+            is_playing: timing.is_playing,
+            settings,
+        }
     }
 
     pub async fn is_playing(&self) -> bool {
-        self.playback_state.lock().await.is_playing
+        self.playback_timing.lock().await.is_playing
     }
 
     pub async fn should_quit(&self) -> bool {
@@ -460,7 +467,6 @@ impl AppModel {
         state.error_timestamp = None;
     }
 
-    /// Check if error should be auto-cleared (after 5 seconds)
     pub async fn auto_clear_old_errors(&self) {
         let mut state = self.ui_state.lock().await;
         if let Some(timestamp) = state.error_timestamp {

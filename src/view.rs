@@ -6,12 +6,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::model::{ActiveSection, RepeatState, TrackInfo, UiState};
+use crate::model::{ActiveSection, PlaybackInfo, RepeatState, UiState};
 
 pub struct AppView;
 
 impl AppView {
-    pub fn render(frame: &mut Frame, track: &TrackInfo, is_playing: bool, ui_state: &UiState) {
+    pub fn render(frame: &mut Frame, playback: &PlaybackInfo, ui_state: &UiState) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -22,13 +22,13 @@ impl AppView {
             .split(frame.area());
 
         // Top bar: Search + Device
-        Self::render_top_bar(frame, chunks[0], ui_state);
+        Self::render_top_bar(frame, chunks[0], ui_state, &playback.settings.device_name);
 
         // Middle: Sidebar (Library + Playlists) and Main Content
         Self::render_main_area(frame, chunks[1], ui_state);
 
         // Bottom: Progress bar with track info and controls
-        Self::render_progress_bar(frame, chunks[2], track, is_playing, ui_state);
+        Self::render_progress_bar(frame, chunks[2], playback);
 
         // Error notification overlay (if there's an error)
         if ui_state.error_message.is_some() {
@@ -36,7 +36,7 @@ impl AppView {
         }
     }
 
-    fn render_top_bar(frame: &mut Frame, area: Rect, ui_state: &UiState) {
+    fn render_top_bar(frame: &mut Frame, area: Rect, ui_state: &UiState, device_name: &str) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -73,7 +73,7 @@ impl AppView {
         frame.render_widget(search, chunks[0]);
 
         // Device name
-        let device = Paragraph::new(format!("🎵 {}", ui_state.device_name))
+        let device = Paragraph::new(format!("🎵 {}", device_name))
             .style(Style::default().fg(Color::Cyan))
             .block(Block::default().borders(Borders::ALL).title(" Device "));
         frame.render_widget(device, chunks[1]);
@@ -197,44 +197,42 @@ impl AppView {
     fn render_progress_bar(
         frame: &mut Frame,
         area: Rect,
-        track: &TrackInfo,
-        is_playing: bool,
-        ui_state: &UiState,
+        playback: &PlaybackInfo,
     ) {
         // Build the track status text
-        let status_text = if track.name == "No track playing" {
+        let status_text = if playback.track.name == "No track playing" {
             "No track playing".to_string()
-        } else if is_playing {
+        } else if playback.is_playing {
             format!(
                 "▶ {} | {} ({})",
-                track.name, track.artist, track.album
+                playback.track.name, playback.track.artist, playback.track.album
             )
         } else {
             format!(
                 "⏸ {} | {} ({})",
-                track.name, track.artist, track.album
+                playback.track.name, playback.track.artist, playback.track.album
             )
         };
 
         // Shuffle, Repeat, Volume info
-        let shuffle_text = if ui_state.shuffle { "Shuffle: On" } else { "Shuffle: Off" };
-        let repeat_text = match ui_state.repeat {
+        let shuffle_text = if playback.settings.shuffle { "Shuffle: On" } else { "Shuffle: Off" };
+        let repeat_text = match playback.settings.repeat {
             RepeatState::Off => "Repeat: Off",
             RepeatState::All => "Repeat: All",
             RepeatState::One => "Repeat: One",
         };
-        let volume_text = format!("Vol: {}%", ui_state.volume);
+        let volume_text = format!("Vol: {}%", playback.settings.volume);
 
         // Time info
         let time_str = format!(
             "{} / {}",
-            Self::format_duration(track.progress_ms),
-            Self::format_duration(track.duration_ms)
+            Self::format_duration(playback.progress_ms),
+            Self::format_duration(playback.duration_ms)
         );
 
         // Calculate progress ratio
-        let progress_ratio = if track.duration_ms > 0 {
-            (track.progress_ms as f64 / track.duration_ms as f64).clamp(0.0, 1.0)
+        let progress_ratio = if playback.duration_ms > 0 {
+            (playback.progress_ms as f64 / playback.duration_ms as f64).clamp(0.0, 1.0)
         } else {
             0.0
         };

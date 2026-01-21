@@ -4,24 +4,23 @@ mod controller;
 mod model;
 mod view;
 
+use std::io;
+use std::sync::Arc;
 use anyhow::Result;
+use std::time::Duration;
+use tokio::sync::Mutex;
 use crossterm::{
     event::{self, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-
 use rspotify::{clients::OAuthClient, AuthCodeSpotify, Config, Token};
-use std::io;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
 
+use view::AppView;
 use audio::AudioPlayer;
 use controller::AppController;
 use model::{AppModel, SpotifyClient};
-use view::AppView;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -48,7 +47,7 @@ async fn main() -> Result<()> {
 
     // Create the SpotifyClient with our device name for targeting
     let device_name = AudioPlayer::get_device_name().to_string();
-    let spotify_client = SpotifyClient::new(rspotify_client, Some(device_name));
+    let spotify_client = SpotifyClient::new(rspotify_client, Some(device_name.clone()));
 
     // Initialize model
     let mut app_model = AppModel::new();
@@ -66,6 +65,10 @@ async fn main() -> Result<()> {
 
     // Wrap model in Arc<Mutex> for shared access
     let model = Arc::new(Mutex::new(app_model));
+    
+    // Set device name in playback settings
+    model.lock().await.update_device_name(device_name).await;
+    
     let controller = AppController::new(model.clone());
 
     // Start listening to librespot player events for real-time updates
@@ -117,15 +120,14 @@ async fn run_app(
 ) -> io::Result<()> {
     loop {
         // Get current state
-        let (track, is_playing, ui_state, should_quit) = {
+        let (playback, ui_state, should_quit) = {
             let model_guard = model.lock().await;
-            
+
             // Auto-clear old errors (after 5 seconds)
             model_guard.auto_clear_old_errors().await;
-            
+
             (
-                model_guard.get_track_info().await,
-                model_guard.is_playing().await,
+                model_guard.get_playback_info().await,
                 model_guard.get_ui_state().await,
                 model_guard.should_quit().await,
             )
@@ -133,7 +135,7 @@ async fn run_app(
 
         // Draw UI
         terminal.draw(|f| {
-            AppView::render(f, &track, is_playing, &ui_state);
+            AppView::render(f, &playback, &ui_state);
         })?;
 
         // Handle input with shorter poll time for smoother UI updates

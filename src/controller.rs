@@ -5,7 +5,7 @@ use librespot::playback::player::{PlayerEvent, PlayerEventChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::model::{ActiveSection, AppModel, TrackInfo};
+use crate::model::{ActiveSection, AppModel, TrackMetadata};
 
 pub struct AppController {
     model: Arc<Mutex<AppModel>>,
@@ -153,9 +153,7 @@ impl AppController {
         if let Some(spotify) = &model.spotify {
             match spotify.get_current_playback().await {
                 Ok(Some(playback)) => {
-                    let track = TrackInfo::from_playback(&playback);
-                    let is_playing = playback.is_playing;
-                    model.update_playback_state(track, is_playing).await;
+                    model.update_from_playback_context(&playback).await;
                 }
                 Ok(None) => {
                     // No active playback, this is fine
@@ -238,12 +236,11 @@ impl AppController {
                             }
                         };
 
-                        let track = TrackInfo {
+                        let track = TrackMetadata {
                             name: audio_item.name.clone(),
                             artist,
                             album,
                             duration_ms: audio_item.duration_ms,
-                            progress_ms: 0,
                         };
                         model_guard.update_track_info(track).await;
                     }
