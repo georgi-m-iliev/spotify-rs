@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use rspotify::{
-    model::{CurrentPlaybackContext, PlayableItem},
+    model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, Country, AlbumId, PlaylistId, ArtistId},
     prelude::*,
     AuthCodeSpotify,
 };
@@ -92,6 +92,236 @@ impl Default for UiState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SearchTrack {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_ms: u32,
+    pub uri: String,
+}
+
+/// An album from search results
+#[derive(Clone, Debug)]
+pub struct SearchAlbum {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub year: String,
+    pub total_tracks: u32,
+}
+
+/// An artist from search results
+#[derive(Clone, Debug)]
+pub struct SearchArtist {
+    pub id: String,
+    pub name: String,
+    pub genres: Vec<String>,
+}
+
+/// A playlist from search results
+#[derive(Clone, Debug)]
+pub struct SearchPlaylist {
+    pub id: String,
+    pub name: String,
+    pub owner: String,
+    pub total_tracks: u32,
+}
+
+/// Combined search results
+#[derive(Clone, Debug, Default)]
+pub struct SearchResults {
+    pub tracks: Vec<SearchTrack>,
+    pub albums: Vec<SearchAlbum>,
+    pub artists: Vec<SearchArtist>,
+    pub playlists: Vec<SearchPlaylist>,
+    pub best_match: SearchResultSection,
+}
+
+impl SearchResults {
+    /// Determine the best matching category based on exact/close name matches with the query
+    pub fn determine_best_match(&mut self, query: &str) {
+        let query_lower = query.to_lowercase();
+
+        // Score each category based on how well the top result matches the query
+        // Higher score = better match
+        // Artists have highest priority for exact matches (e.g., searching "Coldplay")
+        let artist_score = self.artists.first().map(|a| {
+            let name_lower = a.name.to_lowercase();
+            if name_lower == query_lower { 100 }
+            else if name_lower.starts_with(&query_lower) { 80 }
+            else if name_lower.contains(&query_lower) { 60 }
+            else { 0 }
+        }).unwrap_or(0);
+
+        // Tracks (songs) are second priority - most searches are for songs
+        let track_score = self.tracks.first().map(|t| {
+            let name_lower = t.name.to_lowercase();
+            let artist_lower = t.artist.to_lowercase();
+            if name_lower == query_lower || artist_lower == query_lower { 95 }
+            else if name_lower.starts_with(&query_lower) || artist_lower.starts_with(&query_lower) { 75 }
+            else if name_lower.contains(&query_lower) || artist_lower.contains(&query_lower) { 55 }
+            else { 0 }
+        }).unwrap_or(0);
+
+        // Albums have lower priority than tracks
+        let album_score = self.albums.first().map(|a| {
+            let name_lower = a.name.to_lowercase();
+            if name_lower == query_lower { 85 }
+            else if name_lower.starts_with(&query_lower) { 65 }
+            else if name_lower.contains(&query_lower) { 45 }
+            else { 0 }
+        }).unwrap_or(0);
+
+        // Playlists have lowest priority
+        let playlist_score = self.playlists.first().map(|p| {
+            let name_lower = p.name.to_lowercase();
+            if name_lower == query_lower { 80 }
+            else if name_lower.starts_with(&query_lower) { 60 }
+            else if name_lower.contains(&query_lower) { 40 }
+            else { 0 }
+        }).unwrap_or(0);
+
+        // Find the best match, defaulting to tracks if all scores are 0
+        let max_score = artist_score.max(album_score).max(playlist_score).max(track_score);
+
+        self.best_match = if max_score == 0 {
+            // No good match, default to tracks if available, otherwise first non-empty
+            if !self.tracks.is_empty() { SearchResultSection::Tracks }
+            else if !self.artists.is_empty() { SearchResultSection::Artists }
+            else if !self.albums.is_empty() { SearchResultSection::Albums }
+            else { SearchResultSection::Playlists }
+        } else if artist_score == max_score {
+            SearchResultSection::Artists
+        } else if album_score == max_score {
+            SearchResultSection::Albums
+        } else if playlist_score == max_score {
+            SearchResultSection::Playlists
+        } else {
+            SearchResultSection::Tracks
+        };
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AlbumDetail {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub year: String,
+    pub tracks: Vec<SearchTrack>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlaylistDetail {
+    pub id: String,
+    pub name: String,
+    pub owner: String,
+    pub description: Option<String>,
+    pub tracks: Vec<SearchTrack>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArtistDetail {
+    pub id: String,
+    pub name: String,
+    pub genres: Vec<String>,
+    pub top_tracks: Vec<SearchTrack>,
+    pub albums: Vec<SearchAlbum>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SearchResultSection {
+    #[default]
+    Tracks,
+    Albums,
+    Artists,
+    Playlists,
+}
+
+impl SearchResultSection {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Tracks => Self::Albums,
+            Self::Albums => Self::Artists,
+            Self::Artists => Self::Playlists,
+            Self::Playlists => Self::Tracks,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Tracks => Self::Playlists,
+            Self::Albums => Self::Tracks,
+            Self::Artists => Self::Albums,
+            Self::Playlists => Self::Artists,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ContentView {
+    #[default]
+    Empty,
+    SearchResults {
+        results: SearchResults,
+        section: SearchResultSection,
+        track_index: usize,
+        album_index: usize,
+        artist_index: usize,
+        playlist_index: usize,
+    },
+    AlbumDetail {
+        detail: AlbumDetail,
+        selected_index: usize,
+    },
+    PlaylistDetail {
+        detail: PlaylistDetail,
+        selected_index: usize,
+    },
+    ArtistDetail {
+        detail: ArtistDetail,
+        section: ArtistDetailSection,
+        track_index: usize,
+        album_index: usize,
+    },
+}
+
+/// Which section within artist detail is selected
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ArtistDetailSection {
+    #[default]
+    TopTracks,
+    Albums,
+}
+
+impl ArtistDetailSection {
+    pub fn next(self) -> Self {
+        match self {
+            Self::TopTracks => Self::Albums,
+            Self::Albums => Self::TopTracks,
+        }
+    }
+}
+
+/// Navigation history entry for back navigation
+#[derive(Clone, Debug)]
+pub enum NavigationEntry {
+    SearchResults,
+    Album(String),
+    Playlist(String),
+    Artist(String),
+}
+
+/// State for the main content area
+#[derive(Clone, Debug, Default)]
+pub struct ContentState {
+    pub view: ContentView,
+    pub navigation_stack: Vec<NavigationEntry>,
+    pub is_loading: bool,
+}
+
 #[derive(Clone)]
 pub struct SpotifyClient {
     client: Arc<AuthCodeSpotify>,
@@ -157,6 +387,256 @@ impl SpotifyClient {
                 .transfer_playback(&device_id, Some(true))
                 .await?;
         }
+        Ok(())
+    }
+
+    /// Search for tracks, albums, artists, and playlists
+    pub async fn search(&self, query: &str, limit: u32) -> Result<SearchResults> {
+        let market = Some(Market::Country(Country::UnitedStates));
+        let mut results = SearchResults::default();
+
+        // Search for tracks
+        let track_result = self.client.search(
+            query,
+            SearchType::Track,
+            market,
+            None,
+            Some(limit),
+            None,
+        ).await?;
+
+        if let rspotify::model::SearchResult::Tracks(page) = track_result {
+            for track in page.items {
+                let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+                results.tracks.push(SearchTrack {
+                    uri: format!("spotify:track:{}", track_id),
+                    id: track_id,
+                    name: track.name,
+                    artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: track.album.name,
+                    duration_ms: track.duration.num_milliseconds() as u32,
+                });
+            }
+        }
+
+        // Search for albums
+        let album_result = self.client.search(
+            query,
+            SearchType::Album,
+            market,
+            None,
+            Some(limit),
+            None,
+        ).await?;
+
+        if let rspotify::model::SearchResult::Albums(page) = album_result {
+            for album in page.items {
+                results.albums.push(SearchAlbum {
+                    id: album.id.as_ref().map(|id| id.to_string()).unwrap_or_default(),
+                    name: album.name,
+                    artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    year: album.release_date.unwrap_or_default().chars().take(4).collect(),
+                    total_tracks: 0, // SimplifiedAlbum doesn't have total_tracks
+                });
+            }
+        }
+
+        // Search for artists
+        let artist_result = self.client.search(
+            query,
+            SearchType::Artist,
+            market,
+            None,
+            Some(limit),
+            None,
+        ).await?;
+
+        if let rspotify::model::SearchResult::Artists(page) = artist_result {
+            for artist in page.items {
+                results.artists.push(SearchArtist {
+                    id: artist.id.to_string(),
+                    name: artist.name,
+                    genres: artist.genres,
+                });
+            }
+        }
+
+        // Search for playlists
+        let playlist_result = self.client.search(
+            query,
+            SearchType::Playlist,
+            market,
+            None,
+            Some(limit),
+            None,
+        ).await?;
+
+        if let rspotify::model::SearchResult::Playlists(page) = playlist_result {
+            for playlist in page.items {
+                results.playlists.push(SearchPlaylist {
+                    id: playlist.id.to_string(),
+                    name: playlist.name,
+                    owner: playlist.owner.display_name.unwrap_or_else(|| playlist.owner.id.to_string()),
+                    total_tracks: playlist.tracks.total,
+                });
+            }
+        }
+
+        // Determine which category best matches the query
+        results.determine_best_match(query);
+
+        Ok(results)
+    }
+
+    /// Get album details with tracks
+    pub async fn get_album(&self, album_id: &str) -> Result<AlbumDetail> {
+        let id = AlbumId::from_id(album_id)?;
+        let album = self.client.album(id.clone(), None).await?;
+
+        let mut tracks = Vec::new();
+
+        // Album tracks are included in the full album response
+        for track in album.tracks.items.iter() {
+            let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+            tracks.push(SearchTrack {
+                uri: format!("spotify:track:{}", track_id),
+                id: track_id,
+                name: track.name.clone(),
+                artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                album: album.name.clone(),
+                duration_ms: track.duration.num_milliseconds() as u32,
+            });
+        }
+
+        Ok(AlbumDetail {
+            id: album_id.to_string(),
+            name: album.name,
+            artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+            year: album.release_date.chars().take(4).collect(),
+            tracks,
+        })
+    }
+
+    /// Get playlist details with tracks
+    pub async fn get_playlist(&self, playlist_id: &str) -> Result<PlaylistDetail> {
+        let id = PlaylistId::from_id(playlist_id)?;
+        let playlist = self.client.playlist(id.clone(), None, None).await?;
+
+        let mut tracks = Vec::new();
+
+        // Playlist tracks are included in the full playlist response
+        for item in playlist.tracks.items.iter() {
+            if let Some(PlayableItem::Track(track)) = &item.track {
+                let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+                tracks.push(SearchTrack {
+                    uri: format!("spotify:track:{}", track_id),
+                    id: track_id,
+                    name: track.name.clone(),
+                    artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: track.album.name.clone(),
+                    duration_ms: track.duration.num_milliseconds() as u32,
+                });
+            }
+        }
+
+        Ok(PlaylistDetail {
+            id: playlist_id.to_string(),
+            name: playlist.name,
+            owner: playlist.owner.display_name.clone().unwrap_or_else(|| playlist.owner.id.to_string()),
+            description: playlist.description.clone(),
+            tracks,
+        })
+    }
+
+    /// Get artist details with top tracks and albums
+    pub async fn get_artist(&self, artist_id: &str) -> Result<ArtistDetail> {
+        use futures::TryStreamExt;
+
+        let id = ArtistId::from_id(artist_id)?;
+        let artist = self.client.artist(id.clone()).await?;
+
+        // Get top tracks
+        let market = Market::Country(Country::UnitedStates);
+        let top_tracks_result = self.client.artist_top_tracks(id.clone(), Some(market)).await?;
+
+        let top_tracks: Vec<SearchTrack> = top_tracks_result
+            .into_iter()
+            .map(|track| {
+                let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+                SearchTrack {
+                    uri: format!("spotify:track:{}", track_id),
+                    id: track_id,
+                    name: track.name,
+                    artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: track.album.name,
+                    duration_ms: track.duration.num_milliseconds() as u32,
+                }
+            })
+            .collect();
+
+        // Get albums - artist_albums returns a stream
+        let album_stream = self.client.artist_albums(id, None, None);
+        let album_pages: Vec<_> = album_stream.try_collect().await?;
+
+        let albums: Vec<SearchAlbum> = album_pages
+            .into_iter()
+            .map(|album| SearchAlbum {
+                id: album.id.as_ref().map(|i| i.to_string()).unwrap_or_default(),
+                name: album.name,
+                artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                year: album.release_date.unwrap_or_default().chars().take(4).collect(),
+                total_tracks: 0,
+            })
+            .collect();
+
+        Ok(ArtistDetail {
+            id: artist_id.to_string(),
+            name: artist.name,
+            genres: artist.genres,
+            top_tracks,
+            albums,
+        })
+    }
+
+    /// Play a specific track URI
+    pub async fn play_track(&self, uri: &str) -> Result<()> {
+        let device_id = self.get_device_id().await;
+
+        // Extract track ID from URI (format: spotify:track:ID)
+        let track_id = uri.split(':').last().unwrap_or(uri);
+
+        self.client
+            .start_uris_playback(
+                [rspotify::model::PlayableId::Track(rspotify::model::TrackId::from_id(track_id)?)],
+                device_id.as_deref(),
+                None,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Play a context (album, playlist, artist)
+    pub async fn play_context(&self, uri: &str) -> Result<()> {
+        let device_id = self.get_device_id().await;
+
+        // Parse the URI to determine type
+        let play_context = if uri.contains(":album:") {
+            let id = uri.split(':').last().unwrap_or("");
+            rspotify::model::PlayContextId::Album(AlbumId::from_id(id)?)
+        } else if uri.contains(":playlist:") {
+            let id = uri.split(':').last().unwrap_or("");
+            rspotify::model::PlayContextId::Playlist(PlaylistId::from_id(id)?)
+        } else if uri.contains(":artist:") {
+            let id = uri.split(':').last().unwrap_or("");
+            rspotify::model::PlayContextId::Artist(ArtistId::from_id(id)?)
+        } else {
+            return Err(anyhow::anyhow!("Unknown context type: {}", uri));
+        };
+
+        self.client
+            .start_context_playback(play_context, device_id.as_deref(), None, None)
+            .await?;
         Ok(())
     }
 }
@@ -305,6 +785,7 @@ pub struct AppModel {
     playback_timing: Arc<Mutex<PlaybackTiming>>,
     playback_settings: Arc<Mutex<PlaybackSettings>>,
     pub ui_state: Arc<Mutex<UiState>>,
+    pub content_state: Arc<Mutex<ContentState>>,
     pub should_quit: Arc<Mutex<bool>>,
 }
 
@@ -316,6 +797,7 @@ impl AppModel {
             playback_timing: Arc::new(Mutex::new(PlaybackTiming::default())),
             playback_settings: Arc::new(Mutex::new(PlaybackSettings::default())),
             ui_state: Arc::new(Mutex::new(UiState::default())),
+            content_state: Arc::new(Mutex::new(ContentState::default())),
             should_quit: Arc::new(Mutex::new(false)),
         }
     }
@@ -476,4 +958,289 @@ impl AppModel {
             }
         }
     }
+
+    // ========================================================================
+    // Content State Management
+    // ========================================================================
+
+    pub async fn get_content_state(&self) -> ContentState {
+        self.content_state.lock().await.clone()
+    }
+
+    pub async fn set_search_results(&self, results: SearchResults) {
+        let mut state = self.content_state.lock().await;
+        // Push current view to navigation stack if it's not empty
+        if !matches!(state.view, ContentView::Empty) {
+            state.navigation_stack.clear(); // Clear stack on new search
+        }
+        // Use the best matching category as the initial section
+        let initial_section = results.best_match;
+        state.view = ContentView::SearchResults {
+            results,
+            section: initial_section,
+            track_index: 0,
+            album_index: 0,
+            artist_index: 0,
+            playlist_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_album_detail(&self, detail: AlbumDetail) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.push(NavigationEntry::Album(detail.id.clone()));
+        state.view = ContentView::AlbumDetail {
+            detail,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_playlist_detail(&self, detail: PlaylistDetail) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.push(NavigationEntry::Playlist(detail.id.clone()));
+        state.view = ContentView::PlaylistDetail {
+            detail,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_artist_detail(&self, detail: ArtistDetail) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.push(NavigationEntry::Artist(detail.id.clone()));
+        state.view = ContentView::ArtistDetail {
+            detail,
+            section: ArtistDetailSection::TopTracks,
+            track_index: 0,
+            album_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_content_loading(&self, loading: bool) {
+        let mut state = self.content_state.lock().await;
+        state.is_loading = loading;
+    }
+
+    pub async fn navigate_back(&self) -> bool {
+        let mut state = self.content_state.lock().await;
+        if state.navigation_stack.pop().is_some() {
+            // If there's still history, we need to reload the previous view
+            // For now, just go back to search results
+            if let Some(last) = state.navigation_stack.last() {
+                // Would need to reload - for simplicity, clear to search
+                match last {
+                    NavigationEntry::SearchResults => {
+                        // Keep current search results
+                    }
+                    _ => {
+                        // Would need to re-fetch - just clear for now
+                    }
+                }
+            }
+            true
+        } else {
+            // No navigation history - go back to empty/search
+            state.view = ContentView::Empty;
+            false
+        }
+    }
+
+    /// Navigate within search results sections (left/right)
+    pub async fn navigate_search_section(&self, forward: bool) {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::SearchResults { ref mut section, .. } = state.view {
+            *section = if forward { section.next() } else { section.prev() };
+        }
+    }
+
+    /// Navigate within artist detail sections
+    pub async fn navigate_artist_section(&self) {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::ArtistDetail { ref mut section, .. } = state.view {
+            *section = section.next();
+        }
+    }
+
+    /// Move selection up in current content view
+    pub async fn content_move_up(&self) {
+        let mut state = self.content_state.lock().await;
+        match &mut state.view {
+            ContentView::SearchResults {
+                section,
+                track_index,
+                album_index,
+                artist_index,
+                playlist_index,
+                ..
+            } => {
+                let idx = match section {
+                    SearchResultSection::Tracks => track_index,
+                    SearchResultSection::Albums => album_index,
+                    SearchResultSection::Artists => artist_index,
+                    SearchResultSection::Playlists => playlist_index,
+                };
+                if *idx > 0 {
+                    *idx -= 1;
+                }
+            }
+            ContentView::AlbumDetail { selected_index, .. } => {
+                if *selected_index > 0 {
+                    *selected_index -= 1;
+                }
+            }
+            ContentView::PlaylistDetail { selected_index, .. } => {
+                if *selected_index > 0 {
+                    *selected_index -= 1;
+                }
+            }
+            ContentView::ArtistDetail {
+                section,
+                track_index,
+                album_index,
+                ..
+            } => {
+                let idx = match section {
+                    ArtistDetailSection::TopTracks => track_index,
+                    ArtistDetailSection::Albums => album_index,
+                };
+                if *idx > 0 {
+                    *idx -= 1;
+                }
+            }
+            ContentView::Empty => {}
+        }
+    }
+
+    /// Move selection down in current content view
+    pub async fn content_move_down(&self) {
+        let mut state = self.content_state.lock().await;
+        match &mut state.view {
+            ContentView::SearchResults {
+                results,
+                section,
+                track_index,
+                album_index,
+                artist_index,
+                playlist_index,
+            } => {
+                let (idx, max) = match section {
+                    SearchResultSection::Tracks => (track_index, results.tracks.len()),
+                    SearchResultSection::Albums => (album_index, results.albums.len()),
+                    SearchResultSection::Artists => (artist_index, results.artists.len()),
+                    SearchResultSection::Playlists => (playlist_index, results.playlists.len()),
+                };
+                if *idx < max.saturating_sub(1) {
+                    *idx += 1;
+                }
+            }
+            ContentView::AlbumDetail { detail, selected_index } => {
+                if *selected_index < detail.tracks.len().saturating_sub(1) {
+                    *selected_index += 1;
+                }
+            }
+            ContentView::PlaylistDetail { detail, selected_index } => {
+                if *selected_index < detail.tracks.len().saturating_sub(1) {
+                    *selected_index += 1;
+                }
+            }
+            ContentView::ArtistDetail {
+                detail,
+                section,
+                track_index,
+                album_index,
+            } => {
+                let (idx, max) = match section {
+                    ArtistDetailSection::TopTracks => (track_index, detail.top_tracks.len()),
+                    ArtistDetailSection::Albums => (album_index, detail.albums.len()),
+                };
+                if *idx < max.saturating_sub(1) {
+                    *idx += 1;
+                }
+            }
+            ContentView::Empty => {}
+        }
+    }
+
+    /// Get the currently selected item info for actions (play, open)
+    pub async fn get_selected_content_item(&self) -> Option<SelectedItem> {
+        let state = self.content_state.lock().await;
+        match &state.view {
+            ContentView::SearchResults {
+                results,
+                section,
+                track_index,
+                album_index,
+                artist_index,
+                playlist_index,
+            } => match section {
+                SearchResultSection::Tracks => results.tracks.get(*track_index).map(|t| {
+                    SelectedItem::Track {
+                        uri: t.uri.clone(),
+                        name: t.name.clone(),
+                    }
+                }),
+                SearchResultSection::Albums => results.albums.get(*album_index).map(|a| {
+                    SelectedItem::Album {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                    }
+                }),
+                SearchResultSection::Artists => results.artists.get(*artist_index).map(|a| {
+                    SelectedItem::Artist {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                    }
+                }),
+                SearchResultSection::Playlists => results.playlists.get(*playlist_index).map(|p| {
+                    SelectedItem::Playlist {
+                        id: p.id.clone(),
+                        name: p.name.clone(),
+                    }
+                }),
+            },
+            ContentView::AlbumDetail { detail, selected_index } => {
+                detail.tracks.get(*selected_index).map(|t| SelectedItem::Track {
+                    uri: t.uri.clone(),
+                    name: t.name.clone(),
+                })
+            }
+            ContentView::PlaylistDetail { detail, selected_index } => {
+                detail.tracks.get(*selected_index).map(|t| SelectedItem::Track {
+                    uri: t.uri.clone(),
+                    name: t.name.clone(),
+                })
+            }
+            ContentView::ArtistDetail {
+                detail,
+                section,
+                track_index,
+                album_index,
+            } => match section {
+                ArtistDetailSection::TopTracks => detail.top_tracks.get(*track_index).map(|t| {
+                    SelectedItem::Track {
+                        uri: t.uri.clone(),
+                        name: t.name.clone(),
+                    }
+                }),
+                ArtistDetailSection::Albums => detail.albums.get(*album_index).map(|a| {
+                    SelectedItem::Album {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                    }
+                }),
+            },
+            ContentView::Empty => None,
+        }
+    }
+}
+
+/// Represents a selected item for action handling
+#[derive(Clone, Debug)]
+pub enum SelectedItem {
+    Track { uri: String, name: String },
+    Album { id: String, name: String },
+    Artist { id: String, name: String },
+    Playlist { id: String, name: String },
 }

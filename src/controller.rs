@@ -5,7 +5,7 @@ use librespot::playback::player::{PlayerEvent, PlayerEventChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::model::{ActiveSection, AppModel, TrackMetadata};
+use crate::model::{ActiveSection, AppModel, SelectedItem, TrackMetadata};
 
 pub struct AppController {
     model: Arc<Mutex<AppModel>>,
@@ -36,6 +36,15 @@ impl AppController {
                     }
                     return Ok(());
                 }
+                KeyCode::Enter => {
+                    // Trigger search
+                    let query = ui_state.search_query.clone();
+                    drop(model);
+                    if !query.is_empty() {
+                        self.perform_search(&query).await;
+                    }
+                    return Ok(());
+                }
                 KeyCode::Esc => {
                     model.update_search_query(String::new()).await;
                     return Ok(());
@@ -51,6 +60,43 @@ impl AppController {
                         return Ok(());
                     }
                     model.append_to_search(c).await;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
+        // Handle MainContent section navigation
+        if ui_state.active_section == ActiveSection::MainContent {
+            match key.code {
+                KeyCode::Up => {
+                    model.content_move_up().await;
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    model.content_move_down().await;
+                    return Ok(());
+                }
+                KeyCode::Left => {
+                    model.navigate_search_section(false).await;
+                    return Ok(());
+                }
+                KeyCode::Right => {
+                    model.navigate_search_section(true).await;
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    // Open selected item or play track
+                    let selected = model.get_selected_content_item().await;
+                    drop(model);
+                    if let Some(item) = selected {
+                        self.handle_selected_item(item).await;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Backspace | KeyCode::Esc => {
+                    // Navigate back
+                    model.navigate_back().await;
                     return Ok(());
                 }
                 _ => {}
@@ -100,6 +146,91 @@ impl AppController {
             _ => {}
         }
         Ok(())
+    }
+
+    async fn perform_search(&self, query: &str) {
+        let model = self.model.lock().await;
+        model.set_content_loading(true).await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.search(query, 10).await {
+                Ok(results) => {
+                    model.set_search_results(results).await;
+                    // Switch to MainContent section to show results
+                    let mut ui_state = model.ui_state.lock().await;
+                    ui_state.active_section = ActiveSection::MainContent;
+                }
+                Err(e) => {
+                    model.set_content_loading(false).await;
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_selected_item(&self, item: SelectedItem) {
+        let model = self.model.lock().await;
+
+        match item {
+            SelectedItem::Track { uri, .. } => {
+                // Play the track
+                if let Some(spotify) = &model.spotify {
+                    if let Err(e) = spotify.play_track(&uri).await {
+                        let error_msg = Self::format_error(&e);
+                        model.set_error(error_msg).await;
+                    }
+                }
+            }
+            SelectedItem::Album { id, .. } => {
+                // Open album detail
+                model.set_content_loading(true).await;
+                if let Some(spotify) = &model.spotify {
+                    match spotify.get_album(&id).await {
+                        Ok(detail) => {
+                            model.set_album_detail(detail).await;
+                        }
+                        Err(e) => {
+                            model.set_content_loading(false).await;
+                            let error_msg = Self::format_error(&e);
+                            model.set_error(error_msg).await;
+                        }
+                    }
+                }
+            }
+            SelectedItem::Artist { id, .. } => {
+                // Open artist detail
+                model.set_content_loading(true).await;
+                if let Some(spotify) = &model.spotify {
+                    match spotify.get_artist(&id).await {
+                        Ok(detail) => {
+                            model.set_artist_detail(detail).await;
+                        }
+                        Err(e) => {
+                            model.set_content_loading(false).await;
+                            let error_msg = Self::format_error(&e);
+                            model.set_error(error_msg).await;
+                        }
+                    }
+                }
+            }
+            SelectedItem::Playlist { id, .. } => {
+                // Open playlist detail
+                model.set_content_loading(true).await;
+                if let Some(spotify) = &model.spotify {
+                    match spotify.get_playlist(&id).await {
+                        Ok(detail) => {
+                            model.set_playlist_detail(detail).await;
+                        }
+                        Err(e) => {
+                            model.set_content_loading(false).await;
+                            let error_msg = Self::format_error(&e);
+                            model.set_error(error_msg).await;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     async fn toggle_playback(&self) {

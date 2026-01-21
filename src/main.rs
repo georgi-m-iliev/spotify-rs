@@ -65,10 +65,10 @@ async fn main() -> Result<()> {
 
     // Wrap model in Arc<Mutex> for shared access
     let model = Arc::new(Mutex::new(app_model));
-    
+
     // Set device name in playback settings
     model.lock().await.update_device_name(device_name).await;
-    
+
     let controller = AppController::new(model.clone());
 
     // Start listening to librespot player events for real-time updates
@@ -120,7 +120,7 @@ async fn run_app(
 ) -> io::Result<()> {
     loop {
         // Get current state
-        let (playback, ui_state, should_quit) = {
+        let (playback, ui_state, content_state, should_quit) = {
             let model_guard = model.lock().await;
 
             // Auto-clear old errors (after 5 seconds)
@@ -129,13 +129,14 @@ async fn run_app(
             (
                 model_guard.get_playback_info().await,
                 model_guard.get_ui_state().await,
+                model_guard.get_content_state().await,
                 model_guard.should_quit().await,
             )
         };
 
         // Draw UI
         terminal.draw(|f| {
-            AppView::render(f, &playback, &ui_state);
+            AppView::render(f, &playback, &ui_state, &content_state);
         })?;
 
         // Handle input with shorter poll time for smoother UI updates

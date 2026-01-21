@@ -35,7 +35,10 @@ impl AudioPlayer {
             ..Default::default()
         };
         let audio_format = AudioFormat::default();
-        let connect_config = ConnectConfig::default();
+        let connect_config = ConnectConfig {
+            name: DEVICE_NAME.to_string(),
+            ..Default::default()
+        };
         let mixer_config = MixerConfig::default();
         let sink_builder = audio_backend::find(None).unwrap();
         let mixer_builder = mixer::find(None).unwrap();

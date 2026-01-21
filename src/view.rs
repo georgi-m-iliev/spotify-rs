@@ -6,12 +6,15 @@ use ratatui::{
     Frame,
 };
 
-use crate::model::{ActiveSection, PlaybackInfo, RepeatState, UiState};
+use crate::model::{
+    ActiveSection, ArtistDetailSection, ContentState, ContentView, PlaybackInfo,
+    RepeatState, SearchResultSection, UiState,
+};
 
 pub struct AppView;
 
 impl AppView {
-    pub fn render(frame: &mut Frame, playback: &PlaybackInfo, ui_state: &UiState) {
+    pub fn render(frame: &mut Frame, playback: &PlaybackInfo, ui_state: &UiState, content_state: &ContentState) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -25,7 +28,7 @@ impl AppView {
         Self::render_top_bar(frame, chunks[0], ui_state, &playback.settings.device_name);
 
         // Middle: Sidebar (Library + Playlists) and Main Content
-        Self::render_main_area(frame, chunks[1], ui_state);
+        Self::render_main_area(frame, chunks[1], ui_state, content_state);
 
         // Bottom: Progress bar with track info and controls
         Self::render_progress_bar(frame, chunks[2], playback);
@@ -79,7 +82,7 @@ impl AppView {
         frame.render_widget(device, chunks[1]);
     }
 
-    fn render_main_area(frame: &mut Frame, area: Rect, ui_state: &UiState) {
+    fn render_main_area(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -92,7 +95,7 @@ impl AppView {
         Self::render_sidebar(frame, chunks[0], ui_state);
 
         // Main content area
-        Self::render_main_content(frame, chunks[1], ui_state);
+        Self::render_main_content(frame, chunks[1], ui_state, content_state);
     }
 
     fn render_sidebar(frame: &mut Frame, area: Rect, ui_state: &UiState) {
@@ -175,23 +178,464 @@ impl AppView {
         frame.render_widget(playlists, chunks[1]);
     }
 
-    fn render_main_content(frame: &mut Frame, area: Rect, ui_state: &UiState) {
-        let border_style = if ui_state.active_section == ActiveSection::MainContent {
+    fn render_main_content(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState) {
+        let is_focused = ui_state.active_section == ActiveSection::MainContent;
+        let border_style = if is_focused {
             Style::default().fg(Color::Green)
         } else {
             Style::default()
         };
 
-        // For now, show placeholder content
-        let content = Paragraph::new("Select a playlist or library item to view content\n\nUse Tab to navigate between sections\nUse ↑/↓ to select items\nPress Enter to open")
-            .style(Style::default().fg(Color::DarkGray))
+        if content_state.is_loading {
+            let loading = Paragraph::new("Loading...")
+                .style(Style::default().fg(Color::Yellow))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Content ")
+                        .border_style(border_style),
+                );
+            frame.render_widget(loading, area);
+            return;
+        }
+
+        match &content_state.view {
+            ContentView::Empty => {
+                let content = Paragraph::new("Type in search and press Enter to find music\n\nUse Tab to navigate between sections\nUse ↑/↓ to select items\nPress Enter to open")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Content ")
+                            .border_style(border_style),
+                    );
+                frame.render_widget(content, area);
+            }
+            ContentView::SearchResults {
+                results,
+                section,
+                track_index,
+                album_index,
+                artist_index,
+                playlist_index,
+            } => {
+                Self::render_search_results(
+                    frame,
+                    area,
+                    results,
+                    *section,
+                    *track_index,
+                    *album_index,
+                    *artist_index,
+                    *playlist_index,
+                    is_focused,
+                );
+            }
+            ContentView::AlbumDetail { detail, selected_index } => {
+                Self::render_album_detail(frame, area, detail, *selected_index, is_focused);
+            }
+            ContentView::PlaylistDetail { detail, selected_index } => {
+                Self::render_playlist_detail(frame, area, detail, *selected_index, is_focused);
+            }
+            ContentView::ArtistDetail {
+                detail,
+                section,
+                track_index,
+                album_index,
+            } => {
+                Self::render_artist_detail(
+                    frame,
+                    area,
+                    detail,
+                    *section,
+                    *track_index,
+                    *album_index,
+                    is_focused,
+                );
+            }
+        }
+    }
+
+    fn render_search_results(
+        frame: &mut Frame,
+        area: Rect,
+        results: &crate::model::SearchResults,
+        section: SearchResultSection,
+        track_index: usize,
+        album_index: usize,
+        artist_index: usize,
+        playlist_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        // Split into tabs area and content area
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Category tabs
+                Constraint::Min(0),    // Results list
+            ])
+            .split(area);
+
+        // Render category tabs
+        let tab_titles = vec![
+            format!(" Songs ({}) ", results.tracks.len()),
+            format!(" Albums ({}) ", results.albums.len()),
+            format!(" Artists ({}) ", results.artists.len()),
+            format!(" Playlists ({}) ", results.playlists.len()),
+        ];
+
+        let tabs_content: Vec<ratatui::text::Span> = tab_titles
+            .iter()
+            .enumerate()
+            .flat_map(|(i, title)| {
+                let tab_section = match i {
+                    0 => SearchResultSection::Tracks,
+                    1 => SearchResultSection::Albums,
+                    2 => SearchResultSection::Artists,
+                    _ => SearchResultSection::Playlists,
+                };
+                let style = if tab_section == section {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                vec![
+                    ratatui::text::Span::styled(title.clone(), style),
+                    ratatui::text::Span::raw("  "),
+                ]
+            })
+            .collect();
+
+        let tabs_line = ratatui::text::Line::from(tabs_content);
+        let tabs = Paragraph::new(tabs_line)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Content ")
+                    .title(" Results (←/→ to switch) ")
                     .border_style(border_style),
             );
-        frame.render_widget(content, area);
+        frame.render_widget(tabs, chunks[0]);
+
+        // Render the selected category's results
+        let list_items: Vec<ListItem> = match section {
+            SearchResultSection::Tracks => {
+                results.tracks.iter().enumerate().map(|(i, track)| {
+                    let duration = Self::format_duration(track.duration_ms);
+                    let style = if i == track_index && is_focused {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if i == track_index {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    ListItem::new(format!("  {} - {} [{}]", track.name, track.artist, duration)).style(style)
+                }).collect()
+            }
+            SearchResultSection::Albums => {
+                results.albums.iter().enumerate().map(|(i, album)| {
+                    let style = if i == album_index && is_focused {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if i == album_index {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    ListItem::new(format!("  {} - {} ({})", album.name, album.artist, album.year)).style(style)
+                }).collect()
+            }
+            SearchResultSection::Artists => {
+                results.artists.iter().enumerate().map(|(i, artist)| {
+                    let style = if i == artist_index && is_focused {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if i == artist_index {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    let genres = if artist.genres.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", artist.genres.iter().take(2).cloned().collect::<Vec<_>>().join(", "))
+                    };
+                    ListItem::new(format!("  {}{}", artist.name, genres)).style(style)
+                }).collect()
+            }
+            SearchResultSection::Playlists => {
+                results.playlists.iter().enumerate().map(|(i, playlist)| {
+                    let style = if i == playlist_index && is_focused {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if i == playlist_index {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    ListItem::new(format!("  {} by {} ({} tracks)", playlist.name, playlist.owner, playlist.total_tracks)).style(style)
+                }).collect()
+            }
+        };
+
+        let empty_msg = match section {
+            SearchResultSection::Tracks => "No songs found",
+            SearchResultSection::Albums => "No albums found",
+            SearchResultSection::Artists => "No artists found",
+            SearchResultSection::Playlists => "No playlists found",
+        };
+
+        if list_items.is_empty() {
+            let empty = Paragraph::new(format!("  {}", empty_msg))
+                .style(Style::default().fg(Color::DarkGray))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(border_style),
+                );
+            frame.render_widget(empty, chunks[1]);
+        } else {
+            let list = List::new(list_items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(border_style),
+            );
+            frame.render_widget(list, chunks[1]);
+        }
+    }
+
+    fn render_album_detail(
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::model::AlbumDetail,
+        selected_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4), // Header
+                Constraint::Min(0),    // Tracks
+            ])
+            .split(area);
+
+        // Header
+        let header_text = format!(
+            " {} by {} ({})\n {} tracks | Press Backspace to go back",
+            detail.name,
+            detail.artist,
+            detail.year,
+            detail.tracks.len()
+        );
+        let header = Paragraph::new(header_text)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+        frame.render_widget(header, chunks[0]);
+
+        // Tracks
+        let track_items: Vec<ListItem> = detail
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track)| {
+                let duration = Self::format_duration(track.duration_ms);
+                let style = if i == selected_index && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == selected_index {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!(" {}. {} [{}]", i + 1, track.name, duration)).style(style)
+            })
+            .collect();
+
+        let tracks = List::new(track_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Tracks ")
+                .border_style(border_style),
+        );
+        frame.render_widget(tracks, chunks[1]);
+    }
+
+    fn render_playlist_detail(
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::model::PlaylistDetail,
+        selected_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4), // Header
+                Constraint::Min(0),    // Tracks
+            ])
+            .split(area);
+
+        // Header
+        let header_text = format!(
+            " {} by {}\n {} tracks | Press Backspace to go back",
+            detail.name,
+            detail.owner,
+            detail.tracks.len()
+        );
+        let header = Paragraph::new(header_text)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+        frame.render_widget(header, chunks[0]);
+
+        // Tracks
+        let track_items: Vec<ListItem> = detail
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track)| {
+                let duration = Self::format_duration(track.duration_ms);
+                let style = if i == selected_index && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == selected_index {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!(" {} - {} [{}]", track.name, track.artist, duration)).style(style)
+            })
+            .collect();
+
+        let tracks = List::new(track_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Tracks ")
+                .border_style(border_style),
+        );
+        frame.render_widget(tracks, chunks[1]);
+    }
+
+    fn render_artist_detail(
+        frame: &mut Frame,
+        area: Rect,
+        detail: &crate::model::ArtistDetail,
+        section: ArtistDetailSection,
+        track_index: usize,
+        album_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Header
+                Constraint::Min(0),    // Content (top tracks + albums)
+            ])
+            .split(area);
+
+        // Header
+        let genres = if detail.genres.is_empty() {
+            String::new()
+        } else {
+            format!(" | {}", detail.genres.join(", "))
+        };
+        let header_text = format!(
+            " {}{} | Press ←/→ to switch sections, Backspace to go back",
+            detail.name, genres
+        );
+        let header = Paragraph::new(header_text)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+        frame.render_widget(header, chunks[0]);
+
+        // Content: Top tracks and Albums side by side
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(chunks[1]);
+
+        // Top tracks
+        let track_items: Vec<ListItem> = detail
+            .top_tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track)| {
+                let duration = Self::format_duration(track.duration_ms);
+                let style = if i == track_index && section == ArtistDetailSection::TopTracks && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == track_index && section == ArtistDetailSection::TopTracks {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!(" {}. {} [{}]", i + 1, track.name, duration)).style(style)
+            })
+            .collect();
+
+        let tracks_border = if section == ArtistDetailSection::TopTracks && is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let tracks = List::new(track_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Top Tracks ")
+                .border_style(tracks_border),
+        );
+        frame.render_widget(tracks, content_chunks[0]);
+
+        // Albums
+        let album_items: Vec<ListItem> = detail
+            .albums
+            .iter()
+            .enumerate()
+            .map(|(i, album)| {
+                let style = if i == album_index && section == ArtistDetailSection::Albums && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == album_index && section == ArtistDetailSection::Albums {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!(" {} ({})", album.name, album.year)).style(style)
+            })
+            .collect();
+
+        let albums_border = if section == ArtistDetailSection::Albums && is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let albums = List::new(album_items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Albums ")
+                .border_style(albums_border),
+        );
+        frame.render_widget(albums, content_chunks[1]);
     }
 
     fn render_progress_bar(
@@ -274,7 +718,7 @@ impl AppView {
             let area = frame.area();
 
             // Calculate centered popup size
-            let popup_width = error_msg.len().min(60) as u16 + 4;
+            let popup_width = error_msg.len().min(60_usize) as u16 + 4;
             let popup_height = 5;
 
             let popup_x = area.width.saturating_sub(popup_width) / 2;
