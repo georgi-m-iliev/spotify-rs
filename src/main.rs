@@ -117,18 +117,19 @@ async fn run_app(
 ) -> io::Result<()> {
     loop {
         // Get current state
-        let (track, is_playing, should_quit) = {
+        let (track, is_playing, ui_state, should_quit) = {
             let model_guard = model.lock().await;
             (
                 model_guard.get_track_info().await,
                 model_guard.is_playing().await,
+                model_guard.get_ui_state().await,
                 model_guard.should_quit().await,
             )
         };
 
         // Draw UI
         terminal.draw(|f| {
-            AppView::render(f, &track, is_playing);
+            AppView::render(f, &track, is_playing, &ui_state);
         })?;
 
         // Handle input with shorter poll time for smoother UI updates

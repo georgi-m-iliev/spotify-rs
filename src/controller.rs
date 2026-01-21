@@ -1,11 +1,11 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use librespot::metadata::audio::UniqueFields;
 use librespot::playback::player::{PlayerEvent, PlayerEventChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::model::{AppModel, TrackInfo};
+use crate::model::{ActiveSection, AppModel, TrackInfo};
 
 pub struct AppController {
     model: Arc<Mutex<AppModel>>,
@@ -22,21 +22,75 @@ impl AppController {
             return Ok(());
         }
 
+        let model = self.model.lock().await;
+        let ui_state = model.get_ui_state().await;
+
+        // Handle search input when in search section
+        if ui_state.active_section == ActiveSection::Search {
+            match key.code {
+                KeyCode::Tab => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        model.cycle_section_backward().await;
+                    } else {
+                        model.cycle_section_forward().await;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Esc => {
+                    model.update_search_query(String::new()).await;
+                    return Ok(());
+                }
+                KeyCode::Backspace => {
+                    model.backspace_search().await;
+                    return Ok(());
+                }
+                KeyCode::Char(c) => {
+                    // Q still quits even in search mode when Ctrl is pressed
+                    if (c == 'q' || c == 'Q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        model.set_should_quit(true).await;
+                        return Ok(());
+                    }
+                    model.append_to_search(c).await;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
-                let model = self.model.lock().await;
                 model.set_should_quit(true).await;
             }
+            KeyCode::Tab => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    model.cycle_section_backward().await;
+                } else {
+                    model.cycle_section_forward().await;
+                }
+            }
+            KeyCode::BackTab => {
+                model.cycle_section_backward().await;
+            }
+            KeyCode::Up => {
+                model.move_selection_up().await;
+            }
+            KeyCode::Down => {
+                model.move_selection_down().await;
+            }
             KeyCode::Char(' ') => {
+                drop(model); // Release lock before async operation
                 self.toggle_playback().await?;
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
+                drop(model);
                 self.next_track().await?;
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
+                drop(model);
                 self.previous_track().await?;
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
+                drop(model);
                 self.refresh_playback().await?;
             }
             _ => {}

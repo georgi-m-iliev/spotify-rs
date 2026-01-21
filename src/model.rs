@@ -8,6 +8,98 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
+/// Active section for Tab navigation
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActiveSection {
+    Search,
+    Library,
+    Playlists,
+    MainContent,
+}
+
+impl ActiveSection {
+    pub fn next(self) -> Self {
+        match self {
+            ActiveSection::Search => ActiveSection::Library,
+            ActiveSection::Library => ActiveSection::Playlists,
+            ActiveSection::Playlists => ActiveSection::MainContent,
+            ActiveSection::MainContent => ActiveSection::Search,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            ActiveSection::Search => ActiveSection::MainContent,
+            ActiveSection::Library => ActiveSection::Search,
+            ActiveSection::Playlists => ActiveSection::Library,
+            ActiveSection::MainContent => ActiveSection::Playlists,
+        }
+    }
+}
+
+/// Library items that can be selected
+#[derive(Clone, Debug)]
+pub struct LibraryItem {
+    pub name: String,
+}
+
+/// Playlist item
+#[derive(Clone, Debug)]
+pub struct PlaylistItem {
+    pub id: String,
+    pub name: String,
+}
+
+/// UI state for the application
+#[derive(Clone)]
+pub struct UiState {
+    pub active_section: ActiveSection,
+    pub search_query: String,
+    pub library_items: Vec<LibraryItem>,
+    pub library_selected: usize,
+    pub playlists: Vec<PlaylistItem>,
+    pub playlist_selected: usize,
+    pub device_name: String,
+    pub shuffle: bool,
+    pub repeat: RepeatState,
+    pub volume: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepeatState {
+    Off,
+    All,
+    One,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            active_section: ActiveSection::Search,
+            search_query: String::new(),
+            library_items: vec![
+                LibraryItem { name: "Made for you".to_string() },
+                LibraryItem { name: "Recently played".to_string() },
+                LibraryItem { name: "Liked songs".to_string() },
+                LibraryItem { name: "Albums".to_string() },
+                LibraryItem { name: "Artists".to_string() },
+            ],
+            library_selected: 0,
+            playlists: vec![
+                PlaylistItem { id: "1".to_string(), name: "Playlist Example 1".to_string() },
+                PlaylistItem { id: "2".to_string(), name: "Playlist Example 2".to_string() },
+                PlaylistItem { id: "3".to_string(), name: "Playlist Example 3".to_string() },
+                PlaylistItem { id: "4".to_string(), name: "Playlist Example 4".to_string() },
+            ],
+            playlist_selected: 0,
+            device_name: "spotify-rs".to_string(),
+            shuffle: false,
+            repeat: RepeatState::Off,
+            volume: 100,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SpotifyClient {
     client: Arc<AuthCodeSpotify>,
@@ -169,7 +261,7 @@ impl PlaybackState {
     pub fn current_position_ms(&self) -> u32 {
         if self.is_playing && self.duration_ms > 0 {
             let elapsed = self.last_update.elapsed().as_millis() as u32;
-            (self.position_ms.saturating_add(elapsed)).min(self.duration_ms)
+            self.position_ms.saturating_add(elapsed).min(self.duration_ms)
         } else {
             self.position_ms.min(self.duration_ms.max(1) - 1)
         }
@@ -211,6 +303,7 @@ pub struct AppModel {
     pub spotify: Option<SpotifyClient>,
     pub current_track: Arc<Mutex<TrackInfo>>,
     pub playback_state: Arc<Mutex<PlaybackState>>,
+    pub ui_state: Arc<Mutex<UiState>>,
     pub should_quit: Arc<Mutex<bool>>,
 }
 
@@ -220,6 +313,7 @@ impl AppModel {
             spotify: None,
             current_track: Arc::new(Mutex::new(TrackInfo::default())),
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
+            ui_state: Arc::new(Mutex::new(UiState::default())),
             should_quit: Arc::new(Mutex::new(false)),
         }
     }
@@ -285,5 +379,68 @@ impl AppModel {
 
     pub async fn set_should_quit(&self, quit: bool) {
         *self.should_quit.lock().await = quit;
+    }
+
+    pub async fn get_ui_state(&self) -> UiState {
+        self.ui_state.lock().await.clone()
+    }
+
+    pub async fn cycle_section_forward(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.active_section = state.active_section.next();
+    }
+
+    pub async fn cycle_section_backward(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.active_section = state.active_section.prev();
+    }
+
+    pub async fn move_selection_up(&self) {
+        let mut state = self.ui_state.lock().await;
+        match state.active_section {
+            ActiveSection::Library => {
+                if state.library_selected > 0 {
+                    state.library_selected -= 1;
+                }
+            }
+            ActiveSection::Playlists => {
+                if state.playlist_selected > 0 {
+                    state.playlist_selected -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub async fn move_selection_down(&self) {
+        let mut state = self.ui_state.lock().await;
+        match state.active_section {
+            ActiveSection::Library => {
+                if state.library_selected < state.library_items.len().saturating_sub(1) {
+                    state.library_selected += 1;
+                }
+            }
+            ActiveSection::Playlists => {
+                if state.playlist_selected < state.playlists.len().saturating_sub(1) {
+                    state.playlist_selected += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub async fn update_search_query(&self, query: String) {
+        let mut state = self.ui_state.lock().await;
+        state.search_query = query;
+    }
+
+    pub async fn append_to_search(&self, c: char) {
+        let mut state = self.ui_state.lock().await;
+        state.search_query.push(c);
+    }
+
+    pub async fn backspace_search(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.search_query.pop();
     }
 }
