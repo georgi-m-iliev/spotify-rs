@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph},
     Frame,
 };
-
+use ratatui::widgets::Padding;
 use crate::model::{
     ActiveSection, ArtistDetailSection, ContentState, ContentView, PlaybackInfo,
     RepeatState, SearchResultSection, UiState,
@@ -85,6 +85,7 @@ impl AppView {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(" Search ")
+                    .padding(Padding::horizontal(1))
                     .border_style(if ui_state.active_section == ActiveSection::Search {
                         Style::default().fg(Color::Green)
                     } else {
@@ -142,7 +143,7 @@ impl AppView {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                ListItem::new(format!("  {}", item.name)).style(style)
+                ListItem::new(format!("{}", item.name)).style(style)
             })
             .collect();
 
@@ -156,6 +157,7 @@ impl AppView {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Library ")
+                .padding(Padding::horizontal(1))
                 .border_style(library_border_style),
         );
         frame.render_widget(library, chunks[0]);
@@ -177,7 +179,7 @@ impl AppView {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                ListItem::new(format!("  {}", item.name)).style(style)
+                ListItem::new(format!("{}", item.name)).style(style)
             })
             .collect();
 
@@ -192,6 +194,7 @@ impl AppView {
                 Block::default()
                     .borders(Borders::ALL)
                     .title(" Playlists ")
+                    .padding(Padding::horizontal(1))
                     .border_style(playlists_border_style),
             )
             .highlight_style(Style::default()); // Highlight handled by item styles
@@ -231,7 +234,7 @@ impl AppView {
                     .block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .title(" Content ")
+                            .padding(Padding::horizontal(1))
                             .border_style(border_style),
                     );
                 frame.render_widget(content, area);
@@ -359,7 +362,7 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(format!("  {} - {} [{}]", track.name, track.artist, duration)).style(style)
+                    ListItem::new(format!("{} - {} [{}]", track.name, track.artist, duration)).style(style)
                 }).collect()
             }
             SearchResultSection::Albums => {
@@ -371,7 +374,7 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(format!("  {} - {} ({})", album.name, album.artist, album.year)).style(style)
+                    ListItem::new(format!("{} - {} ({})", album.name, album.artist, album.year)).style(style)
                 }).collect()
             }
             SearchResultSection::Artists => {
@@ -388,7 +391,7 @@ impl AppView {
                     } else {
                         format!(" ({})", artist.genres.iter().take(2).cloned().collect::<Vec<_>>().join(", "))
                     };
-                    ListItem::new(format!("  {}{}", artist.name, genres)).style(style)
+                    ListItem::new(format!("{}{}", artist.name, genres)).style(style)
                 }).collect()
             }
             SearchResultSection::Playlists => {
@@ -400,7 +403,7 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(format!("  {} by {} ({} tracks)", playlist.name, playlist.owner, playlist.total_tracks)).style(style)
+                    ListItem::new(format!("{} by {} ({} tracks)", playlist.name, playlist.owner, playlist.total_tracks)).style(style)
                 }).collect()
             }
         };
@@ -418,6 +421,7 @@ impl AppView {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .padding(Padding::horizontal(1))
                         .border_style(border_style),
                 );
             frame.render_widget(empty, chunks[1]);
@@ -432,6 +436,7 @@ impl AppView {
 
             let list_block = Block::default()
                 .borders(Borders::ALL)
+                .padding(Padding::horizontal(1))
                 .border_style(border_style);
 
             Self::render_scrollable_list(frame, chunks[1], list_items, selected_index, list_block);
@@ -486,13 +491,14 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!(" {}. {} [{}]", i + 1, track.name, duration)).style(style)
+                ListItem::new(format!("{}. {} [{}]", i + 1, track.name, duration)).style(style)
             })
             .collect();
 
         let tracks_block = Block::default()
             .borders(Borders::ALL)
             .title(" Tracks ")
+            .padding(Padding::horizontal(1))
             .border_style(border_style);
 
         Self::render_scrollable_list(frame, chunks[1], track_items, selected_index, tracks_block);
@@ -545,13 +551,14 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!(" {} - {} [{}]", track.name, track.artist, duration)).style(style)
+                ListItem::new(format!("{} - {} [{}]", track.name, track.artist, duration)).style(style)
             })
             .collect();
 
         let tracks_block = Block::default()
             .borders(Borders::ALL)
             .title(" Tracks ")
+            .padding(Padding::horizontal(1))
             .border_style(border_style);
 
         Self::render_scrollable_list(frame, chunks[1], track_items, selected_index, tracks_block);
@@ -618,7 +625,7 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!(" {}. {} [{}]", i + 1, track.name, duration)).style(style)
+                ListItem::new(format!("{}. {} [{}]", i + 1, track.name, duration)).style(style)
             })
             .collect();
 
@@ -631,6 +638,7 @@ impl AppView {
         let tracks_block = Block::default()
             .borders(Borders::ALL)
             .title(" Top Tracks ")
+            .padding(Padding::horizontal(1))
             .border_style(tracks_border);
 
         Self::render_scrollable_list(frame, content_chunks[0], track_items, track_index, tracks_block);
@@ -648,7 +656,7 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!(" {} ({})", album.name, album.year)).style(style)
+                ListItem::new(format!("{} ({})", album.name, album.year)).style(style)
             })
             .collect();
 
@@ -661,6 +669,7 @@ impl AppView {
         let albums_block = Block::default()
             .borders(Borders::ALL)
             .title(" Albums ")
+            .padding(Padding::horizontal(1))
             .border_style(albums_border);
 
         Self::render_scrollable_list(frame, content_chunks[1], album_items, album_index, albums_block);
@@ -673,10 +682,10 @@ impl AppView {
     ) {
         // Build the track status text
         let status_text = if playback.track.name == "No track playing" {
-            "No track playing".to_string()
+            " No track playing".to_string()
         } else if playback.is_playing {
             format!(
-                "▶  {} | {} ({})",
+                " ▶ {} | {} ({})",
                 playback.track.name, playback.track.artist, playback.track.album
             )
         } else {
@@ -717,8 +726,8 @@ impl AppView {
             .split(area);
 
         // Build title with track info on left, controls on right
-        let title = format!(" {} ", status_text);
-        let controls_info = format!("{} | {} | {} ", shuffle_text, repeat_text, volume_text);
+        let title = format!("{} ", status_text);
+        let controls_info = format!(" {} | {} | {} ", shuffle_text, repeat_text, volume_text);
 
         let gauge = Gauge::default()
             .block(
