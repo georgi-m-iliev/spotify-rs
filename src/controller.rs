@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 
 use crate::model::{ActiveSection, AppModel, SelectedItem, TrackMetadata};
 
+pub const SEARCH_LIMIT: usize = 40;
+
 pub struct AppController {
     model: Arc<Mutex<AppModel>>,
 }
@@ -180,7 +182,7 @@ impl AppController {
         model.set_content_loading(true).await;
 
         if let Some(spotify) = &model.spotify {
-            match spotify.search(query, 40).await {
+            match spotify.search(query, SEARCH_LIMIT as u32).await {
                 Ok(results) => {
                     model.set_search_results(results).await;
                     // Switch to MainContent section to show results
