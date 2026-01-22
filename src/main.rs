@@ -77,6 +77,9 @@ async fn main() -> Result<()> {
     // Initial refresh from Spotify API to get current track info
     controller.refresh_playback().await;
 
+    // Load user's playlists
+    controller.load_user_playlists().await;
+
     // Set initial volume to 70% via Spotify API
     // Wait a bit for device to be fully registered
     tokio::time::sleep(Duration::from_millis(500)).await;

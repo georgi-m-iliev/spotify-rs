@@ -44,6 +44,7 @@ pub struct LibraryItem {
 #[derive(Clone, Debug)]
 pub struct PlaylistItem {
     pub id: String,
+    pub uri: String,
     pub name: String,
 }
 
@@ -79,12 +80,7 @@ impl Default for UiState {
                 LibraryItem { name: "Artists".to_string() },
             ],
             library_selected: 0,
-            playlists: vec![
-                PlaylistItem { id: "1".to_string(), name: "Playlist Example 1".to_string() },
-                PlaylistItem { id: "2".to_string(), name: "Playlist Example 2".to_string() },
-                PlaylistItem { id: "3".to_string(), name: "Playlist Example 3".to_string() },
-                PlaylistItem { id: "4".to_string(), name: "Playlist Example 4".to_string() },
-            ],
+            playlists: vec![], // Will be loaded from Spotify API
             playlist_selected: 0,
             error_message: None,
             error_timestamp: None,
@@ -216,6 +212,7 @@ pub struct AlbumDetail {
 #[derive(Clone, Debug)]
 pub struct PlaylistDetail {
     pub id: String,
+    pub uri: String,
     pub name: String,
     pub owner: String,
     pub description: Option<String>,
@@ -305,20 +302,11 @@ impl ArtistDetailSection {
     }
 }
 
-/// Navigation history entry for back navigation
-#[derive(Clone, Debug)]
-pub enum NavigationEntry {
-    SearchResults,
-    Album(String),
-    Playlist(String),
-    Artist(String),
-}
-
 /// State for the main content area
 #[derive(Clone, Debug, Default)]
 pub struct ContentState {
     pub view: ContentView,
-    pub navigation_stack: Vec<NavigationEntry>,
+    pub navigation_stack: Vec<ContentView>,
     pub is_loading: bool,
 }
 
@@ -415,6 +403,8 @@ impl SpotifyClient {
 
     /// Search for tracks, albums, artists, and playlists
     pub async fn search(&self, query: &str, limit: u32) -> Result<SearchResults> {
+        use rspotify::prelude::Id;
+
         let market = Some(Market::Country(Country::UnitedStates));
         let mut results = SearchResults::default();
 
@@ -430,7 +420,7 @@ impl SpotifyClient {
 
         if let rspotify::model::SearchResult::Tracks(page) = track_result {
             for track in page.items {
-                let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                 results.tracks.push(SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
@@ -455,7 +445,7 @@ impl SpotifyClient {
         if let rspotify::model::SearchResult::Albums(page) = album_result {
             for album in page.items {
                 results.albums.push(SearchAlbum {
-                    id: album.id.as_ref().map(|id| id.to_string()).unwrap_or_default(),
+                    id: album.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default(),
                     name: album.name,
                     artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     year: album.release_date.unwrap_or_default().chars().take(4).collect(),
@@ -477,7 +467,7 @@ impl SpotifyClient {
         if let rspotify::model::SearchResult::Artists(page) = artist_result {
             for artist in page.items {
                 results.artists.push(SearchArtist {
-                    id: artist.id.to_string(),
+                    id: artist.id.id().to_string(),
                     name: artist.name,
                     genres: artist.genres,
                 });
@@ -496,10 +486,11 @@ impl SpotifyClient {
 
         if let rspotify::model::SearchResult::Playlists(page) = playlist_result {
             for playlist in page.items {
+                let playlist_id = playlist.id.id().to_string();
                 results.playlists.push(SearchPlaylist {
-                    id: playlist.id.to_string(),
+                    id: playlist_id.clone(),
                     name: playlist.name,
-                    owner: playlist.owner.display_name.unwrap_or_else(|| playlist.owner.id.to_string()),
+                    owner: playlist.owner.display_name.unwrap_or_else(|| playlist.owner.id.id().to_string()),
                     total_tracks: playlist.tracks.total,
                 });
             }
@@ -513,6 +504,8 @@ impl SpotifyClient {
 
     /// Get album details with tracks
     pub async fn get_album(&self, album_id: &str) -> Result<AlbumDetail> {
+        use rspotify::prelude::Id;
+
         let id = AlbumId::from_id(album_id)?;
         let album = self.client.album(id.clone(), None).await?;
 
@@ -520,7 +513,7 @@ impl SpotifyClient {
 
         // Album tracks are included in the full album response
         for track in album.tracks.items.iter() {
-            let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+            let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
             tracks.push(SearchTrack {
                 uri: format!("spotify:track:{}", track_id),
                 id: track_id,
@@ -542,6 +535,8 @@ impl SpotifyClient {
 
     /// Get playlist details with tracks
     pub async fn get_playlist(&self, playlist_id: &str) -> Result<PlaylistDetail> {
+        use rspotify::prelude::Id;
+
         let id = PlaylistId::from_id(playlist_id)?;
         let playlist = self.client.playlist(id.clone(), None, None).await?;
 
@@ -550,7 +545,7 @@ impl SpotifyClient {
         // Playlist tracks are included in the full playlist response
         for item in playlist.tracks.items.iter() {
             if let Some(PlayableItem::Track(track)) = &item.track {
-                let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                 tracks.push(SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
@@ -564,6 +559,7 @@ impl SpotifyClient {
 
         Ok(PlaylistDetail {
             id: playlist_id.to_string(),
+            uri: format!("spotify:playlist:{}", playlist_id),
             name: playlist.name,
             owner: playlist.owner.display_name.clone().unwrap_or_else(|| playlist.owner.id.to_string()),
             description: playlist.description.clone(),
@@ -574,6 +570,7 @@ impl SpotifyClient {
     /// Get artist details with top tracks and albums
     pub async fn get_artist(&self, artist_id: &str) -> Result<ArtistDetail> {
         use futures::TryStreamExt;
+        use rspotify::prelude::Id;
 
         let id = ArtistId::from_id(artist_id)?;
         let artist = self.client.artist(id.clone()).await?;
@@ -585,7 +582,7 @@ impl SpotifyClient {
         let top_tracks: Vec<SearchTrack> = top_tracks_result
             .into_iter()
             .map(|track| {
-                let track_id = track.id.as_ref().map(|id| id.to_string()).unwrap_or_default();
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                 SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
@@ -604,7 +601,7 @@ impl SpotifyClient {
         let albums: Vec<SearchAlbum> = album_pages
             .into_iter()
             .map(|album| SearchAlbum {
-                id: album.id.as_ref().map(|i| i.to_string()).unwrap_or_default(),
+                id: album.id.as_ref().map(|i| i.id().to_string()).unwrap_or_default(),
                 name: album.name,
                 artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                 year: album.release_date.unwrap_or_default().chars().take(4).collect(),
@@ -661,6 +658,57 @@ impl SpotifyClient {
             .start_context_playback(play_context, device_id.as_deref(), None, None)
             .await?;
         Ok(())
+    }
+
+    /// Play a context starting from a specific track (by URI)
+    pub async fn play_context_from_track_uri(&self, context_uri: &str, track_uri: &str) -> Result<()> {
+        let device_id = self.get_device_id().await;
+
+        // Parse the URI to determine type
+        let play_context = if context_uri.contains(":album:") {
+            let id = context_uri.split(':').last().unwrap_or("");
+            rspotify::model::PlayContextId::Album(AlbumId::from_id(id)?)
+        } else if context_uri.contains(":playlist:") {
+            let id = context_uri.split(':').last().unwrap_or("");
+            rspotify::model::PlayContextId::Playlist(PlaylistId::from_id(id)?)
+        } else if context_uri.contains(":artist:") {
+            let id = context_uri.split(':').last().unwrap_or("");
+            rspotify::model::PlayContextId::Artist(ArtistId::from_id(id)?)
+        } else {
+            return Err(anyhow::anyhow!("Unknown context type: {}", context_uri));
+        };
+
+        // Use Offset::Uri to start from a specific track
+        let offset = rspotify::model::Offset::Uri(track_uri.to_string());
+
+        self.client
+            .start_context_playback(play_context, device_id.as_deref(), Some(offset), None)
+            .await?;
+        Ok(())
+    }
+
+    /// Get current user's playlists
+    pub async fn get_user_playlists(&self, limit: u32) -> Result<Vec<PlaylistItem>> {
+        use futures::TryStreamExt;
+        use rspotify::prelude::Id;
+
+        let playlist_stream = self.client.current_user_playlists();
+        let all_playlists: Vec<_> = playlist_stream.try_collect().await?;
+
+        let playlists: Vec<PlaylistItem> = all_playlists
+            .into_iter()
+            .take(limit as usize)
+            .map(|playlist| {
+                let id = playlist.id.id().to_string();
+                PlaylistItem {
+                    id: id.clone(),
+                    uri: format!("spotify:playlist:{}", id),
+                    name: playlist.name,
+                }
+            })
+            .collect();
+
+        Ok(playlists)
     }
 }
 
@@ -1001,6 +1049,17 @@ impl AppModel {
         state.search_query.pop();
     }
 
+    pub async fn set_playlists(&self, playlists: Vec<PlaylistItem>) {
+        let mut state = self.ui_state.lock().await;
+        state.playlists = playlists;
+        state.playlist_selected = 0;
+    }
+
+    pub async fn get_selected_playlist(&self) -> Option<PlaylistItem> {
+        let state = self.ui_state.lock().await;
+        state.playlists.get(state.playlist_selected).cloned()
+    }
+
     pub async fn set_error(&self, message: String) {
         let mut state = self.ui_state.lock().await;
         state.error_message = Some(message);
@@ -1052,7 +1111,11 @@ impl AppModel {
 
     pub async fn set_album_detail(&self, detail: AlbumDetail) {
         let mut state = self.content_state.lock().await;
-        state.navigation_stack.push(NavigationEntry::Album(detail.id.clone()));
+        // Save current view to navigation stack before navigating away
+        if !matches!(state.view, ContentView::Empty) {
+            let previous_view = state.view.clone();
+            state.navigation_stack.push(previous_view);
+        }
         state.view = ContentView::AlbumDetail {
             detail,
             selected_index: 0,
@@ -1062,7 +1125,11 @@ impl AppModel {
 
     pub async fn set_playlist_detail(&self, detail: PlaylistDetail) {
         let mut state = self.content_state.lock().await;
-        state.navigation_stack.push(NavigationEntry::Playlist(detail.id.clone()));
+        // Save current view to navigation stack before navigating away
+        if !matches!(state.view, ContentView::Empty) {
+            let previous_view = state.view.clone();
+            state.navigation_stack.push(previous_view);
+        }
         state.view = ContentView::PlaylistDetail {
             detail,
             selected_index: 0,
@@ -1072,7 +1139,11 @@ impl AppModel {
 
     pub async fn set_artist_detail(&self, detail: ArtistDetail) {
         let mut state = self.content_state.lock().await;
-        state.navigation_stack.push(NavigationEntry::Artist(detail.id.clone()));
+        // Save current view to navigation stack before navigating away
+        if !matches!(state.view, ContentView::Empty) {
+            let previous_view = state.view.clone();
+            state.navigation_stack.push(previous_view);
+        }
         state.view = ContentView::ArtistDetail {
             detail,
             section: ArtistDetailSection::TopTracks,
@@ -1089,23 +1160,12 @@ impl AppModel {
 
     pub async fn navigate_back(&self) -> bool {
         let mut state = self.content_state.lock().await;
-        if state.navigation_stack.pop().is_some() {
-            // If there's still history, we need to reload the previous view
-            // For now, just go back to search results
-            if let Some(last) = state.navigation_stack.last() {
-                // Would need to reload - for simplicity, clear to search
-                match last {
-                    NavigationEntry::SearchResults => {
-                        // Keep current search results
-                    }
-                    _ => {
-                        // Would need to re-fetch - just clear for now
-                    }
-                }
-            }
+        if let Some(previous_view) = state.navigation_stack.pop() {
+            // Restore the previous view
+            state.view = previous_view;
             true
         } else {
-            // No navigation history - go back to empty/search
+            // No navigation history - go back to empty view
             state.view = ContentView::Empty;
             false
         }
@@ -1114,8 +1174,15 @@ impl AppModel {
     /// Navigate within search results sections (left/right)
     pub async fn navigate_search_section(&self, forward: bool) {
         let mut state = self.content_state.lock().await;
-        if let ContentView::SearchResults { ref mut section, .. } = state.view {
-            *section = if forward { section.next() } else { section.prev() };
+        match &mut state.view {
+            ContentView::SearchResults { section, .. } => {
+                *section = if forward { section.next() } else { section.prev() };
+            }
+            ContentView::ArtistDetail { section, .. } => {
+                // Artist detail only has 2 sections, so forward/backward both toggle
+                *section = section.next();
+            }
+            _ => {}
         }
     }
 
@@ -1265,14 +1332,16 @@ impl AppModel {
                 }),
             },
             ContentView::AlbumDetail { detail, selected_index } => {
-                detail.tracks.get(*selected_index).map(|t| SelectedItem::Track {
-                    uri: t.uri.clone(),
+                detail.tracks.get(*selected_index).map(|t| SelectedItem::AlbumTrack {
+                    album_uri: format!("spotify:album:{}", detail.id),
+                    track_uri: t.uri.clone(),
                     name: t.name.clone(),
                 })
             }
             ContentView::PlaylistDetail { detail, selected_index } => {
-                detail.tracks.get(*selected_index).map(|t| SelectedItem::Track {
-                    uri: t.uri.clone(),
+                detail.tracks.get(*selected_index).map(|t| SelectedItem::PlaylistTrack {
+                    playlist_uri: detail.uri.clone(),
+                    track_uri: t.uri.clone(),
                     name: t.name.clone(),
                 })
             }
@@ -1307,4 +1376,8 @@ pub enum SelectedItem {
     Album { id: String, name: String },
     Artist { id: String, name: String },
     Playlist { id: String, name: String },
+    /// A track within a playlist context (for playing from that track)
+    PlaylistTrack { playlist_uri: String, track_uri: String, name: String },
+    /// A track within an album context (for playing from that track)
+    AlbumTrack { album_uri: String, track_uri: String, name: String },
 }

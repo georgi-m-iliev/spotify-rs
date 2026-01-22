@@ -127,6 +127,21 @@ impl AppController {
             KeyCode::Down => {
                 model.move_selection_down().await;
             }
+            KeyCode::Enter => {
+                // Handle Enter based on active section
+                let ui_state = model.get_ui_state().await;
+                match ui_state.active_section {
+                    ActiveSection::Playlists => {
+                        // Open selected playlist
+                        if let Some(playlist) = model.get_selected_playlist().await {
+                            drop(model);
+                            self.open_playlist(&playlist.id).await;
+                            return Ok(());
+                        }
+                    }
+                    _ => {}
+                }
+            }
             KeyCode::Char(' ') => {
                 drop(model); // Release lock before async operation
                 self.toggle_playback().await;
@@ -165,7 +180,7 @@ impl AppController {
         model.set_content_loading(true).await;
 
         if let Some(spotify) = &model.spotify {
-            match spotify.search(query, 10).await {
+            match spotify.search(query, 40).await {
                 Ok(results) => {
                     model.set_search_results(results).await;
                     // Switch to MainContent section to show results
@@ -189,6 +204,24 @@ impl AppController {
                 // Play the track
                 if let Some(spotify) = &model.spotify {
                     if let Err(e) = spotify.play_track(&uri).await {
+                        let error_msg = Self::format_error(&e);
+                        model.set_error(error_msg).await;
+                    }
+                }
+            }
+            SelectedItem::PlaylistTrack { playlist_uri, track_uri, .. } => {
+                // Play playlist starting from selected track
+                if let Some(spotify) = &model.spotify {
+                    if let Err(e) = spotify.play_context_from_track_uri(&playlist_uri, &track_uri).await {
+                        let error_msg = Self::format_error(&e);
+                        model.set_error(error_msg).await;
+                    }
+                }
+            }
+            SelectedItem::AlbumTrack { album_uri, track_uri, .. } => {
+                // Play album starting from selected track
+                if let Some(spotify) = &model.spotify {
+                    if let Err(e) = spotify.play_context_from_track_uri(&album_uri, &track_uri).await {
                         let error_msg = Self::format_error(&e);
                         model.set_error(error_msg).await;
                     }
@@ -377,6 +410,69 @@ impl AppController {
                     let error_msg = Self::format_error(&e);
                     model.set_error(error_msg).await;
                 }
+            }
+        }
+    }
+
+    /// Load user's playlists from Spotify API
+    pub async fn load_user_playlists(&self) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.get_user_playlists(50).await {
+                Ok(playlists) => {
+                    model.set_playlists(playlists).await;
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Open a playlist by ID to show its details
+    async fn open_playlist(&self, playlist_id: &str) {
+        let model = self.model.lock().await;
+        model.set_content_loading(true).await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.get_playlist(playlist_id).await {
+                Ok(detail) => {
+                    model.set_playlist_detail(detail).await;
+                    // Switch to MainContent section to show playlist details
+                    let mut ui_state = model.ui_state.lock().await;
+                    ui_state.active_section = ActiveSection::MainContent;
+                }
+                Err(e) => {
+                    model.set_content_loading(false).await;
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Play a playlist from the beginning
+    pub async fn play_playlist_from_start(&self, uri: &str) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            if let Err(e) = spotify.play_context(uri).await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            }
+        }
+    }
+
+    /// Play a playlist starting from a specific track
+    pub async fn play_playlist_from_track(&self, playlist_uri: &str, track_uri: &str) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            if let Err(e) = spotify.play_context_from_track_uri(playlist_uri, track_uri).await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
             }
         }
     }

@@ -9,7 +9,7 @@ use librespot::core::{authentication::Credentials, cache::Cache};
 const SPOTIFY_CLIENT_ID: &str = "492e1e45ea814fa3ac555fe1576aaf5b";
 const SPOTIFY_REDIRECT_URI: &str = "http://127.0.0.1:8898/login";
 pub const SCOPES: &str =
-    "streaming user-read-playback-state user-modify-playback-state user-read-currently-playing";
+    "streaming user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public user-read-playback-position user-top-read user-read-recently-played user-library-modify user-library-read";
 
 const RESPONSE: &str = r#"
 <!doctype html>

@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
@@ -37,6 +37,24 @@ impl AppView {
         if ui_state.error_message.is_some() {
             Self::render_error_notification(frame, ui_state);
         }
+    }
+
+    /// Helper to render a scrollable list with proper state management
+    fn render_scrollable_list(
+        frame: &mut Frame,
+        area: Rect,
+        items: Vec<ListItem>,
+        selected_index: usize,
+        block: Block,
+    ) {
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(Style::default()); // Highlight handled by item styles
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_index));
+
+        frame.render_stateful_widget(list, area, &mut list_state);
     }
 
     fn render_top_bar(frame: &mut Frame, area: Rect, ui_state: &UiState, device_name: &str) {
@@ -142,7 +160,7 @@ impl AppView {
         );
         frame.render_widget(library, chunks[0]);
 
-        // Playlists section
+        // Playlists section - use stateful list for scrolling
         let playlist_items: Vec<ListItem> = ui_state
             .playlists
             .iter()
@@ -169,13 +187,20 @@ impl AppView {
             Style::default()
         };
 
-        let playlists = List::new(playlist_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Playlists ")
-                .border_style(playlists_border_style),
-        );
-        frame.render_widget(playlists, chunks[1]);
+        let playlists = List::new(playlist_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Playlists ")
+                    .border_style(playlists_border_style),
+            )
+            .highlight_style(Style::default()); // Highlight handled by item styles
+
+        // Use ListState for scrolling
+        let mut list_state = ListState::default();
+        list_state.select(Some(ui_state.playlist_selected));
+
+        frame.render_stateful_widget(playlists, chunks[1], &mut list_state);
     }
 
     fn render_main_content(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState) {
@@ -397,12 +422,19 @@ impl AppView {
                 );
             frame.render_widget(empty, chunks[1]);
         } else {
-            let list = List::new(list_items).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(border_style),
-            );
-            frame.render_widget(list, chunks[1]);
+            // Determine selected index based on section
+            let selected_index = match section {
+                SearchResultSection::Tracks => track_index,
+                SearchResultSection::Albums => album_index,
+                SearchResultSection::Artists => artist_index,
+                SearchResultSection::Playlists => playlist_index,
+            };
+
+            let list_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style);
+
+            Self::render_scrollable_list(frame, chunks[1], list_items, selected_index, list_block);
         }
     }
 
@@ -429,7 +461,7 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            " {} by {} ({})\n {} tracks | Press Backspace to go back",
+            " 💿 {} by {} ({})\n {} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.artist,
             detail.year,
@@ -440,7 +472,7 @@ impl AppView {
             .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
-        // Tracks
+        // Tracks - use scrollable list
         let track_items: Vec<ListItem> = detail
             .tracks
             .iter()
@@ -458,13 +490,12 @@ impl AppView {
             })
             .collect();
 
-        let tracks = List::new(track_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Tracks ")
-                .border_style(border_style),
-        );
-        frame.render_widget(tracks, chunks[1]);
+        let tracks_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Tracks ")
+            .border_style(border_style);
+
+        Self::render_scrollable_list(frame, chunks[1], track_items, selected_index, tracks_block);
     }
 
     fn render_playlist_detail(
@@ -490,7 +521,7 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            " {} by {}\n {} tracks | Press Backspace to go back",
+            " 📻 {} by {}\n {} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.owner,
             detail.tracks.len()
@@ -500,7 +531,7 @@ impl AppView {
             .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
-        // Tracks
+        // Tracks - use scrollable list
         let track_items: Vec<ListItem> = detail
             .tracks
             .iter()
@@ -518,13 +549,12 @@ impl AppView {
             })
             .collect();
 
-        let tracks = List::new(track_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Tracks ")
-                .border_style(border_style),
-        );
-        frame.render_widget(tracks, chunks[1]);
+        let tracks_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Tracks ")
+            .border_style(border_style);
+
+        Self::render_scrollable_list(frame, chunks[1], track_items, selected_index, tracks_block);
     }
 
     fn render_artist_detail(
@@ -598,13 +628,12 @@ impl AppView {
             Style::default()
         };
 
-        let tracks = List::new(track_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Top Tracks ")
-                .border_style(tracks_border),
-        );
-        frame.render_widget(tracks, content_chunks[0]);
+        let tracks_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Top Tracks ")
+            .border_style(tracks_border);
+
+        Self::render_scrollable_list(frame, content_chunks[0], track_items, track_index, tracks_block);
 
         // Albums
         let album_items: Vec<ListItem> = detail
@@ -629,13 +658,12 @@ impl AppView {
             Style::default()
         };
 
-        let albums = List::new(album_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Albums ")
-                .border_style(albums_border),
-        );
-        frame.render_widget(albums, content_chunks[1]);
+        let albums_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Albums ")
+            .border_style(albums_border);
+
+        Self::render_scrollable_list(frame, content_chunks[1], album_items, album_index, albums_block);
     }
 
     fn render_progress_bar(
