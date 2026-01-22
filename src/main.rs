@@ -77,6 +77,20 @@ async fn main() -> Result<()> {
     // Initial refresh from Spotify API to get current track info
     controller.refresh_playback().await;
 
+    // Set initial volume to 70% via Spotify API
+    // Wait a bit for device to be fully registered
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let model_guard = model.lock().await;
+    if let Some(ref spotify) = model_guard.spotify {
+        if let Err(e) = spotify.set_volume(70).await {
+            eprintln!("Warning: Could not set initial volume: {}", e);
+        } else {
+            model_guard.set_volume(70).await;
+            println!("✓ Initial volume set to 70%");
+        }
+    }
+    drop(model_guard);
+
     // Run the app
     let res = run_app(&mut terminal, model.clone(), controller).await;
 

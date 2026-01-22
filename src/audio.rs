@@ -4,7 +4,7 @@ use librespot::connect::{ConnectConfig, Spirc};
 use librespot::core::config::SessionConfig;
 use librespot::core::session::Session;
 use librespot::playback::config::{AudioFormat, Bitrate, PlayerConfig};
-use librespot::playback::mixer::{MixerConfig, NoOpVolume};
+use librespot::playback::mixer::MixerConfig;
 use librespot::playback::player::{Player, PlayerEventChannel};
 use librespot::playback::{audio_backend, mixer};
 use std::sync::Arc;
@@ -51,7 +51,7 @@ impl AudioPlayer {
         let player = Player::new(
             player_config,
             session.clone(),
-            Box::new(NoOpVolume),
+            mixer.get_soft_volume(),
             move || sink_builder(None, audio_format),
         );
 

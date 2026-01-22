@@ -139,9 +139,21 @@ impl AppController {
                 drop(model);
                 self.previous_track().await;
             }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                drop(model);
+                self.toggle_shuffle().await;
+            }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 drop(model);
-                self.refresh_playback().await;
+                self.cycle_repeat().await;
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                drop(model);
+                self.volume_up().await;
+            }
+            KeyCode::Char('-') => {
+                drop(model);
+                self.volume_down().await;
             }
             _ => {}
         }
@@ -275,6 +287,78 @@ impl AppController {
             }
         }
         // Note: State will be updated via player events
+    }
+
+    async fn toggle_shuffle(&self) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            let current_shuffle = model.get_shuffle_state().await;
+            let new_shuffle = !current_shuffle;
+
+            if let Err(e) = spotify.set_shuffle(new_shuffle).await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            } else {
+                // Update local state
+                model.set_shuffle(new_shuffle).await;
+            }
+        }
+    }
+
+    async fn cycle_repeat(&self) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            let current_repeat = model.get_repeat_state().await;
+            let new_repeat = match current_repeat {
+                crate::model::RepeatState::Off => crate::model::RepeatState::All,
+                crate::model::RepeatState::All => crate::model::RepeatState::One,
+                crate::model::RepeatState::One => crate::model::RepeatState::Off,
+            };
+
+            if let Err(e) = spotify.set_repeat(new_repeat).await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            } else {
+                // Update local state
+                model.set_repeat(new_repeat).await;
+            }
+        }
+    }
+
+    async fn volume_up(&self) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            let current_volume = model.get_volume().await;
+            let new_volume = (current_volume + 5).min(100);
+
+            if let Err(e) = spotify.set_volume(new_volume).await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            } else {
+                // Update local state
+                model.set_volume(new_volume).await;
+            }
+        }
+    }
+
+    async fn volume_down(&self) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            let current_volume = model.get_volume().await;
+            let new_volume = current_volume.saturating_sub(5);
+
+            if let Err(e) = spotify.set_volume(new_volume).await {
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            } else {
+                // Update local state
+                model.set_volume(new_volume).await;
+            }
+        }
     }
 
     /// Refresh playback state from Spotify API (fallback/initial sync)

@@ -648,12 +648,12 @@ impl AppView {
             "No track playing".to_string()
         } else if playback.is_playing {
             format!(
-                "▶ {} | {} ({})",
+                "▶  {} | {} ({})",
                 playback.track.name, playback.track.artist, playback.track.album
             )
         } else {
             format!(
-                "⏸ {} | {} ({})",
+                "⏸  {} | {} ({})",
                 playback.track.name, playback.track.artist, playback.track.album
             )
         };

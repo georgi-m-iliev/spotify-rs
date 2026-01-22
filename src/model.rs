@@ -381,6 +381,29 @@ impl SpotifyClient {
         Ok(())
     }
 
+    pub async fn set_shuffle(&self, state: bool) -> Result<()> {
+        let device_id = self.get_device_id().await;
+        self.client.shuffle(state, device_id.as_deref()).await?;
+        Ok(())
+    }
+
+    pub async fn set_repeat(&self, state: RepeatState) -> Result<()> {
+        let device_id = self.get_device_id().await;
+        let repeat_state = match state {
+            RepeatState::Off => rspotify::model::RepeatState::Off,
+            RepeatState::All => rspotify::model::RepeatState::Context,
+            RepeatState::One => rspotify::model::RepeatState::Track,
+        };
+        self.client.repeat(repeat_state, device_id.as_deref()).await?;
+        Ok(())
+    }
+
+    pub async fn set_volume(&self, volume: u8) -> Result<()> {
+        let device_id = self.get_device_id().await;
+        self.client.volume(volume, device_id.as_deref()).await?;
+        Ok(())
+    }
+
     pub async fn transfer_playback(&self) -> Result<()> {
         if let Some(device_id) = self.get_device_id().await {
             self.client
@@ -753,7 +776,7 @@ impl Default for PlaybackSettings {
             device_name: "spotify-rs".to_string(),
             shuffle: false,
             repeat: RepeatState::Off,
-            volume: 100,
+            volume: 70,
         }
     }
 }
@@ -846,6 +869,20 @@ impl AppModel {
         timing.duration_ms = track.duration_ms;
         timing.is_playing = is_playing;
         timing.last_update = Instant::now();
+        drop(timing);
+
+        // Update shuffle and repeat states from playback context
+        let mut settings = self.playback_settings.lock().await;
+        settings.shuffle = playback.shuffle_state;
+        settings.repeat = match playback.repeat_state {
+            rspotify::model::RepeatState::Off => RepeatState::Off,
+            rspotify::model::RepeatState::Track => RepeatState::One,
+            rspotify::model::RepeatState::Context => RepeatState::All,
+        };
+        // Update volume if available from device info
+        if let Some(volume) = playback.device.volume_percent {
+            settings.volume = volume as u8;
+        }
     }
 
     pub async fn get_playback_info(&self) -> PlaybackInfo {
@@ -864,6 +901,33 @@ impl AppModel {
 
     pub async fn is_playing(&self) -> bool {
         self.playback_timing.lock().await.is_playing
+    }
+
+    pub async fn get_shuffle_state(&self) -> bool {
+        self.playback_settings.lock().await.shuffle
+    }
+
+    pub async fn set_shuffle(&self, shuffle: bool) {
+        let mut settings = self.playback_settings.lock().await;
+        settings.shuffle = shuffle;
+    }
+
+    pub async fn get_repeat_state(&self) -> RepeatState {
+        self.playback_settings.lock().await.repeat
+    }
+
+    pub async fn set_repeat(&self, repeat: RepeatState) {
+        let mut settings = self.playback_settings.lock().await;
+        settings.repeat = repeat;
+    }
+
+    pub async fn get_volume(&self) -> u8 {
+        self.playback_settings.lock().await.volume
+    }
+
+    pub async fn set_volume(&self, volume: u8) {
+        let mut settings = self.playback_settings.lock().await;
+        settings.volume = volume;
     }
 
     pub async fn should_quit(&self) -> bool {
