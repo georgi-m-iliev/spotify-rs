@@ -428,17 +428,16 @@ impl SpotifyClient {
         let market: Option<Market> = None;
         let mut results = SearchResults::default();
 
-        // Search for tracks
-        let track_result = self.client.search(
-            query,
-            SearchType::Track,
-            market,
-            None,
-            Some(limit),
-            None,
-        ).await?;
+        // Search all types in parallel using futures::join!
+        let (track_result, album_result, artist_result, playlist_result) = futures::join!(
+            self.client.search(query, SearchType::Track, market, None, Some(limit), None),
+            self.client.search(query, SearchType::Album, market, None, Some(limit), None),
+            self.client.search(query, SearchType::Artist, market, None, Some(limit), None),
+            self.client.search(query, SearchType::Playlist, market, None, Some(limit), None)
+        );
 
-        if let rspotify::model::SearchResult::Tracks(page) = track_result {
+        // Process track results
+        if let Ok(rspotify::model::SearchResult::Tracks(page)) = track_result {
             for track in page.items {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                 results.tracks.push(SearchTrack {
@@ -452,39 +451,21 @@ impl SpotifyClient {
             }
         }
 
-        // Search for albums
-        let album_result = self.client.search(
-            query,
-            SearchType::Album,
-            market,
-            None,
-            Some(limit),
-            None,
-        ).await?;
-
-        if let rspotify::model::SearchResult::Albums(page) = album_result {
+        // Process album results
+        if let Ok(rspotify::model::SearchResult::Albums(page)) = album_result {
             for album in page.items {
                 results.albums.push(SearchAlbum {
                     id: album.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default(),
                     name: album.name,
                     artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     year: album.release_date.unwrap_or_default().chars().take(4).collect(),
-                    total_tracks: 0, // SimplifiedAlbum doesn't have total_tracks
+                    total_tracks: 0,
                 });
             }
         }
 
-        // Search for artists
-        let artist_result = self.client.search(
-            query,
-            SearchType::Artist,
-            market,
-            None,
-            Some(limit),
-            None,
-        ).await?;
-
-        if let rspotify::model::SearchResult::Artists(page) = artist_result {
+        // Process artist results
+        if let Ok(rspotify::model::SearchResult::Artists(page)) = artist_result {
             for artist in page.items {
                 results.artists.push(SearchArtist {
                     id: artist.id.id().to_string(),
@@ -494,17 +475,8 @@ impl SpotifyClient {
             }
         }
 
-        // Search for playlists
-        let playlist_result = self.client.search(
-            query,
-            SearchType::Playlist,
-            market,
-            None,
-            Some(limit),
-            None,
-        ).await?;
-
-        if let rspotify::model::SearchResult::Playlists(page) = playlist_result {
+        // Process playlist results
+        if let Ok(rspotify::model::SearchResult::Playlists(page)) = playlist_result {
             for playlist in page.items {
                 let playlist_id = playlist.id.id().to_string();
                 results.playlists.push(SearchPlaylist {
@@ -734,14 +706,17 @@ impl SpotifyClient {
     /// Get user's liked songs (saved tracks)
     pub async fn get_liked_songs(&self, limit: u32) -> Result<Vec<SearchTrack>> {
         use futures::TryStreamExt;
+        use futures::StreamExt;
         use rspotify::prelude::Id;
 
         let tracks_stream = self.client.current_user_saved_tracks(None);
-        let saved_tracks: Vec<_> = tracks_stream.try_collect().await?;
+        let saved_tracks: Vec<_> = tracks_stream
+            .take(limit as usize)
+            .try_collect()
+            .await?;
 
         let tracks: Vec<SearchTrack> = saved_tracks
             .into_iter()
-            .take(limit as usize)
             .map(|saved| {
                 let track = saved.track;
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
