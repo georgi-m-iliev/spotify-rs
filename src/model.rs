@@ -42,6 +42,14 @@ pub struct LibraryItem {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_active: bool,
+    pub volume_percent: Option<u8>,
+}
+
+#[derive(Clone, Debug)]
 pub struct PlaylistItem {
     pub id: String,
     pub uri: String,
@@ -58,6 +66,10 @@ pub struct UiState {
     pub playlist_selected: usize,
     pub error_message: Option<String>,
     pub error_timestamp: Option<Instant>,
+    // Device picker state
+    pub show_device_picker: bool,
+    pub available_devices: Vec<DeviceInfo>,
+    pub device_selected: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +95,9 @@ impl Default for UiState {
             playlist_selected: 0,
             error_message: None,
             error_timestamp: None,
+            show_device_picker: false,
+            available_devices: vec![],
+            device_selected: 0,
         }
     }
 }
@@ -332,14 +347,14 @@ pub struct ContentState {
 #[derive(Clone)]
 pub struct SpotifyClient {
     client: Arc<AuthCodeSpotify>,
-    device_name: Option<String>,
+    local_device_name: Option<String>,
 }
 
 impl SpotifyClient {
-    pub fn new(client: AuthCodeSpotify, device_name: Option<String>) -> Self {
+    pub fn new(client: AuthCodeSpotify, local_device_name: Option<String>) -> Self {
         Self {
             client: Arc::new(client),
-            device_name,
+            local_device_name,
         }
     }
 
@@ -347,19 +362,20 @@ impl SpotifyClient {
         Ok(self.client.current_playback(None, None::<Vec<_>>).await?)
     }
 
+    /// Get the device ID for the currently active device
+    /// This respects device switching by using whatever device is currently active
     async fn get_device_id(&self) -> Option<String> {
         if let Ok(devices) = self.client.device().await {
-            // First try to find our librespot device
-            if let Some(ref name) = self.device_name {
-                if let Some(device) = devices.iter().find(|d| d.name == *name) {
-                    return device.id.clone();
-                }
-            }
-            // Fall back to active device
+            // Use the currently active device
             devices.into_iter().find(|d| d.is_active).and_then(|d| d.id)
         } else {
             None
         }
+    }
+
+    /// Get the local librespot device name
+    pub fn get_local_device_name(&self) -> Option<&str> {
+        self.local_device_name.as_deref()
     }
 
     pub async fn play(&self) -> Result<()> {
@@ -408,6 +424,37 @@ impl SpotifyClient {
     pub async fn set_volume(&self, volume: u8) -> Result<()> {
         let device_id = self.get_device_id().await;
         self.client.volume(volume, device_id.as_deref()).await?;
+        Ok(())
+    }
+
+    /// Get list of available playback devices
+    pub async fn get_available_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let devices = self.client.device().await?;
+        Ok(devices
+            .into_iter()
+            .map(|d| DeviceInfo {
+                id: d.id.unwrap_or_default(),
+                name: d.name,
+                is_active: d.is_active,
+                volume_percent: d.volume_percent.map(|v| v as u8),
+            })
+            .collect())
+    }
+
+    /// Check if there's any active device available for playback
+    pub async fn has_active_device(&self) -> bool {
+        if let Ok(devices) = self.client.device().await {
+            devices.iter().any(|d| d.is_active)
+        } else {
+            false
+        }
+    }
+
+    /// Transfer playback to a specific device
+    pub async fn transfer_playback_to_device(&self, device_id: &str, start_playing: bool) -> Result<()> {
+        self.client
+            .transfer_playback(device_id, Some(start_playing))
+            .await?;
         Ok(())
     }
 
@@ -1172,6 +1219,51 @@ impl AppModel {
                 state.error_timestamp = None;
             }
         }
+    }
+
+    // ========================================================================
+    // Device Picker Management
+    // ========================================================================
+
+    pub async fn show_device_picker(&self, devices: Vec<DeviceInfo>) {
+        let mut state = self.ui_state.lock().await;
+        // Find currently active device and select it
+        let active_index = devices.iter().position(|d| d.is_active).unwrap_or(0);
+        state.available_devices = devices;
+        state.device_selected = active_index;
+        state.show_device_picker = true;
+    }
+
+    pub async fn hide_device_picker(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.show_device_picker = false;
+    }
+
+    pub async fn is_device_picker_open(&self) -> bool {
+        self.ui_state.lock().await.show_device_picker
+    }
+
+    pub async fn device_picker_move_up(&self) {
+        let mut state = self.ui_state.lock().await;
+        if state.device_selected > 0 {
+            state.device_selected -= 1;
+        }
+    }
+
+    pub async fn device_picker_move_down(&self) {
+        let mut state = self.ui_state.lock().await;
+        if state.device_selected < state.available_devices.len().saturating_sub(1) {
+            state.device_selected += 1;
+        }
+    }
+
+    pub async fn get_selected_device(&self) -> Option<DeviceInfo> {
+        let state = self.ui_state.lock().await;
+        state.available_devices.get(state.device_selected).cloned()
+    }
+
+    pub async fn get_local_device_name(&self) -> String {
+        self.playback_settings.lock().await.device_name.clone()
     }
 
     // ========================================================================

@@ -10,14 +10,38 @@ use crate::model::{ActiveSection, AppModel, SelectedItem, TrackMetadata};
 
 pub const SEARCH_LIMIT: usize = 40;
 
+#[derive(Clone)]
 pub struct AppController {
     model: Arc<Mutex<AppModel>>,
-    audio_backend: Arc<AudioBackend>,
+    audio_backend: Arc<Mutex<Option<AudioBackend>>>,
+    event_listener_started: Arc<Mutex<bool>>,
 }
 
 impl AppController {
-    pub fn new(model: Arc<Mutex<AppModel>>, audio_backend: Arc<AudioBackend>) -> Self {
-        Self { model, audio_backend }
+    pub fn new(model: Arc<Mutex<AppModel>>, audio_backend: Arc<Mutex<Option<AudioBackend>>>) -> Self {
+        Self {
+            model,
+            audio_backend,
+            event_listener_started: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Try to start the player event listener if backend is ready and not already started
+    async fn try_start_event_listener(&self) {
+        let mut started = self.event_listener_started.lock().await;
+        if *started {
+            return;
+        }
+
+        let backend_guard = self.audio_backend.lock().await;
+        if let Some(backend) = backend_guard.as_ref() {
+            if let Some(event_channel) = backend.get_player_event_channel().await {
+                *started = true;
+                drop(backend_guard);
+                drop(started);
+                self.start_player_event_listener(event_channel);
+            }
+        }
     }
 
     pub async fn handle_key_event(&self, key: KeyEvent) -> Result<()> {
@@ -27,6 +51,36 @@ impl AppController {
         }
 
         let model = self.model.lock().await;
+
+        // Handle device picker modal first (highest priority)
+        if model.is_device_picker_open().await {
+            match key.code {
+                KeyCode::Up => {
+                    model.device_picker_move_up().await;
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    model.device_picker_move_down().await;
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    // Select the device
+                    if let Some(device) = model.get_selected_device().await {
+                        let local_device_name = model.get_local_device_name().await;
+                        model.hide_device_picker().await;
+                        drop(model);
+                        self.select_device(&device, &local_device_name).await;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
+                    model.hide_device_picker().await;
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            }
+        }
+
         let ui_state = model.get_ui_state().await;
 
         // Handle search input when in search section
@@ -181,6 +235,10 @@ impl AppController {
                 drop(model);
                 self.volume_down().await;
             }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                drop(model);
+                self.open_device_picker().await;
+            }
             _ => {}
         }
         Ok(())
@@ -208,11 +266,14 @@ impl AppController {
     }
 
     async fn handle_selected_item(&self, item: SelectedItem) {
-        let model = self.model.lock().await;
-
         match item {
             SelectedItem::Track { uri, .. } => {
-                // Play the track
+                // Ensure we have a device to play on
+                if !self.ensure_device_available().await {
+                    return;
+                }
+
+                let model = self.model.lock().await;
                 if let Some(spotify) = &model.spotify {
                     let spotify_clone = spotify.clone();
                     let uri_clone = uri.clone();
@@ -232,7 +293,12 @@ impl AppController {
                 }
             }
             SelectedItem::PlaylistTrack { playlist_uri, track_uri, .. } => {
-                // Play playlist starting from selected track
+                // Ensure we have a device to play on
+                if !self.ensure_device_available().await {
+                    return;
+                }
+
+                let model = self.model.lock().await;
                 if let Some(spotify) = &model.spotify {
                     let spotify_clone = spotify.clone();
                     let playlist_uri_clone = playlist_uri.clone();
@@ -254,7 +320,12 @@ impl AppController {
                 }
             }
             SelectedItem::AlbumTrack { album_uri, track_uri, .. } => {
-                // Play album starting from selected track
+                // Ensure we have a device to play on
+                if !self.ensure_device_available().await {
+                    return;
+                }
+
+                let model = self.model.lock().await;
                 if let Some(spotify) = &model.spotify {
                     let spotify_clone = spotify.clone();
                     let album_uri_clone = album_uri.clone();
@@ -277,6 +348,7 @@ impl AppController {
             }
             SelectedItem::Album { id, .. } => {
                 // Open album detail
+                let model = self.model.lock().await;
                 model.set_content_loading(true).await;
                 if let Some(spotify) = &model.spotify {
                     match spotify.get_album(&id).await {
@@ -293,6 +365,7 @@ impl AppController {
             }
             SelectedItem::Artist { id, .. } => {
                 // Open artist detail
+                let model = self.model.lock().await;
                 model.set_content_loading(true).await;
                 if let Some(spotify) = &model.spotify {
                     match spotify.get_artist(&id).await {
@@ -309,6 +382,7 @@ impl AppController {
             }
             SelectedItem::Playlist { id, .. } => {
                 // Open playlist detail
+                let model = self.model.lock().await;
                 model.set_content_loading(true).await;
                 if let Some(spotify) = &model.spotify {
                     match spotify.get_playlist(&id).await {
@@ -328,9 +402,20 @@ impl AppController {
 
     async fn toggle_playback(&self) {
         let model = self.model.lock().await;
+        let is_playing = model.is_playing().await;
 
+        // If we're about to play (not pause), ensure we have a device
+        if !is_playing {
+            drop(model);
+            if !self.ensure_device_available().await {
+                return;
+            }
+        } else {
+            drop(model);
+        }
+
+        let model = self.model.lock().await;
         if let Some(spotify) = &model.spotify {
-            let is_playing = model.is_playing().await;
             let spotify_clone = spotify.clone();
 
             drop(model); // Release lock before potentially slow operations
@@ -470,17 +555,194 @@ impl AppController {
         }
     }
 
-    /// Refresh playback state from Spotify API (fallback/initial sync)
+    /// Open the device picker modal
+    async fn open_device_picker(&self) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.get_available_devices().await {
+                Ok(devices) => {
+                    if devices.is_empty() {
+                        model.set_error("No devices available".to_string()).await;
+                    } else {
+                        model.show_device_picker(devices).await;
+                    }
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Select a device for playback
+    async fn select_device(&self, device: &crate::model::DeviceInfo, local_device_name: &str) {
+        let is_local_device = device.name == local_device_name;
+
+        if is_local_device {
+            // Activate the local audio backend
+            let backend_guard = self.audio_backend.lock().await;
+            if let Some(backend) = backend_guard.as_ref() {
+                if let Err(e) = backend.activate().await {
+                    drop(backend_guard);
+                    let model = self.model.lock().await;
+                    model.set_error(format!("Failed to activate audio: {}", e)).await;
+                    return;
+                }
+            } else {
+                drop(backend_guard);
+                let model = self.model.lock().await;
+                model.set_error("Audio backend not ready".to_string()).await;
+                return;
+            }
+            drop(backend_guard);
+
+            // Try to start event listener if not already started
+            self.try_start_event_listener().await;
+
+            // Give the device a moment to register with Spotify
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        } else {
+            // If switching away from local device, stop playback on it
+            let backend_guard = self.audio_backend.lock().await;
+            if let Some(backend) = backend_guard.as_ref() {
+                backend.stop().await;
+            }
+        }
+
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            // Transfer playback to the selected device
+            match spotify.transfer_playback_to_device(&device.id, true).await {
+                Ok(()) => {
+                    // Update the displayed device name
+                    model.update_device_name(device.name.clone()).await;
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Ensure there's an active device available for playback
+    /// If no device is active, activates the local audio backend
+    /// Returns true if a device is available
+    pub async fn ensure_device_available(&self) -> bool {
+        // First check if our local backend is already active
+        {
+            let backend_guard = self.audio_backend.lock().await;
+            if let Some(backend) = backend_guard.as_ref() {
+                if backend.is_active().await {
+                    return true;
+                }
+            }
+        }
+
+        // Check if there's an active device on Spotify
+        {
+            let model = self.model.lock().await;
+            if let Some(spotify) = &model.spotify {
+                if spotify.has_active_device().await {
+                    return true;
+                }
+            }
+        }
+
+        // No active device - activate our local backend
+        let backend_guard = self.audio_backend.lock().await;
+        if let Some(backend) = backend_guard.as_ref() {
+            match backend.activate().await {
+                Ok(()) => {
+                    drop(backend_guard);
+                    
+                    // Try to start event listener
+                    self.try_start_event_listener().await;
+                    
+                    // Update device name
+                    let model = self.model.lock().await;
+                    model.update_device_name(crate::audio::AudioBackend::get_device_name().to_string()).await;
+
+                    // Give it a moment to register with Spotify
+                    drop(model);
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                    true
+                }
+                Err(e) => {
+                    drop(backend_guard);
+                    let model = self.model.lock().await;
+                    model.set_error(format!("Failed to activate audio: {}", e)).await;
+                    false
+                }
+            }
+        } else {
+            // Backend not ready yet
+            false
+        }
+    }
+
+    /// Initialize playback state on startup
+    /// - If another device is playing: show that device's info, control it
+    /// - If no device is playing: activate local device as default
+    pub async fn initialize_playback(&self) {
+        // First, try to start the event listener if backend is ready
+        self.try_start_event_listener().await;
+        
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.get_current_playback().await {
+                Ok(Some(playback)) => {
+                    // There's active playback on another device - use that
+                    model.update_device_name(playback.device.name.clone()).await;
+                    model.update_from_playback_context(&playback).await;
+                    // Don't activate local backend - just control the existing device
+                }
+                Ok(None) => {
+                    // No active playback - activate local device as default
+                    drop(model); // Release lock before async operation
+                    
+                    let backend_guard = self.audio_backend.lock().await;
+                    if let Some(backend) = backend_guard.as_ref() {
+                        if backend.activate().await.is_ok() {
+                            drop(backend_guard);
+                            self.try_start_event_listener().await;
+                            let model = self.model.lock().await;
+                            model.update_device_name(crate::audio::AudioBackend::get_device_name().to_string()).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                    // Still try to activate local device on error
+                    drop(model);
+                    let backend_guard = self.audio_backend.lock().await;
+                    if let Some(backend) = backend_guard.as_ref() {
+                        let _ = backend.activate().await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Refresh playback state from Spotify API
     pub async fn refresh_playback(&self) {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
             match spotify.get_current_playback().await {
                 Ok(Some(playback)) => {
+                    // There's active playback - update from it
+                    model.update_device_name(playback.device.name.clone()).await;
                     model.update_from_playback_context(&playback).await;
                 }
                 Ok(None) => {
-                    // No active playback, this is fine
+                    // No active playback
                 }
                 Err(e) => {
                     let error_msg = Self::format_error(&e);
@@ -680,26 +942,36 @@ impl AppController {
             model.set_error("Reconnecting audio...".to_string()).await;
         }
 
-        match self.audio_backend.restart().await {
-            Ok(event_channel) => {
-                // Wait a bit for device registration with Spotify
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        let backend_guard = self.audio_backend.lock().await;
+        if let Some(backend) = backend_guard.as_ref() {
+            match backend.restart().await {
+                Ok(event_channel) => {
+                    drop(backend_guard);
+                    // Wait a bit for device registration with Spotify
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
-                {
-                    let model = self.model.lock().await;
-                    model.clear_error().await;
+                    {
+                        let model = self.model.lock().await;
+                        model.clear_error().await;
+                    }
+                    Some(event_channel)
                 }
-                Some(event_channel)
+                Err(e) => {
+                    drop(backend_guard);
+                    let model = self.model.lock().await;
+                    model.set_error(format!("Audio reconnect failed: {}", e)).await;
+                    None
+                }
             }
-            Err(e) => {
-                let model = self.model.lock().await;
-                model.set_error(format!("Audio reconnect failed: {}", e)).await;
-                None
-            }
+        } else {
+            let model = self.model.lock().await;
+            model.set_error("Audio backend not initialized".to_string()).await;
+            None
         }
     }
 
     /// Execute a playback operation with automatic backend recovery on failure
+    /// Only attempts to restart the local audio backend if it was already initialized
     async fn with_backend_recovery<F, Fut>(&self, operation: F) -> Result<()>
     where
         F: Fn() -> Fut + Clone,
@@ -709,9 +981,14 @@ impl AppController {
         match operation().await {
             Ok(()) => return Ok(()),
             Err(e) => {
-                // Check if this is a device unavailable error
-                if Self::is_device_unavailable_error(&e) {
-                    // Try to restart the backend
+                // Check if this is a device unavailable error and the local backend exists
+                let local_backend_exists = {
+                    let backend_guard = self.audio_backend.lock().await;
+                    backend_guard.is_some()
+                };
+
+                if Self::is_device_unavailable_error(&e) && local_backend_exists {
+                    // Try to restart the local backend
                     if let Some(event_channel) = self.try_restart_audio_backend().await {
                         // Start listening to events from the new backend
                         self.start_player_event_listener(event_channel);

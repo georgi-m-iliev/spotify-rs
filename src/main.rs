@@ -26,17 +26,11 @@ use model::{AppModel, SpotifyClient};
 async fn main() -> Result<()> {
     println!("=== Spotify-RS Client ===\n");
 
-    // Step 1: Get credentials and start librespot
+    // Step 1: Get credentials
     let auth_result = auth::perform_oauth_flow().await?;
 
-    let audio_backend = Arc::new(AudioBackend::new(auth_result.clone()).await?);
-
-    // Get player event channel for real-time playback updates
-    let player_event_channel = audio_backend.get_player_event_channel().await
-        .expect("Failed to get player event channel");
-
-    // Step 2: Authenticate with rspotify for API control
-    let rspotify_client = setup_rspotify(auth_result.rspotify_token).await?;
+    // Step 2: Authenticate with rspotify for API control (fast)
+    let rspotify_client = setup_rspotify(auth_result.rspotify_token.clone()).await?;
 
     match rspotify_client.me().await {
         Ok(user) => println!("✓ Rspotify authorized as: {}", user.id.to_string()),
@@ -46,18 +40,17 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Create the SpotifyClient with our device name for targeting
-    let device_name = AudioBackend::get_device_name().to_string();
-    let spotify_client = SpotifyClient::new(rspotify_client, Some(device_name.clone()));
+    // Create the SpotifyClient with our local device name for reference
+    let local_device_name = AudioBackend::get_device_name().to_string();
+    let spotify_client = SpotifyClient::new(rspotify_client, Some(local_device_name.clone()));
 
     // Initialize model
     let mut app_model = AppModel::new();
     app_model.set_spotify_client(spotify_client.clone());
 
-    println!("\nStarting TUI... Press 'q' to quit.\n");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    println!("\nStarting TUI...\n");
 
-    // Setup terminal
+    // Setup terminal FIRST - show UI immediately
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -67,30 +60,50 @@ async fn main() -> Result<()> {
     // Wrap model in Arc<Mutex> for shared access
     let model = Arc::new(Mutex::new(app_model));
 
-    // Set device name in playback settings
-    model.lock().await.update_device_name(device_name).await;
+    // Set initial device name
+    model.lock().await.update_device_name(local_device_name).await;
+
+    // Create a placeholder audio backend Arc that will be populated
+    let audio_backend: Arc<Mutex<Option<AudioBackend>>> = Arc::new(Mutex::new(None));
+
+    // Clone for background initialization
+    let audio_backend_init = audio_backend.clone();
+    let auth_for_backend = auth_result.clone();
+    let model_for_init = model.clone();
+
+    // Initialize audio backend in background
+    tokio::spawn(async move {
+        match AudioBackend::new(auth_for_backend).await {
+            Ok(backend) => {
+                // Get event channel before moving backend
+                let event_channel = backend.get_player_event_channel().await;
+                
+                // Store the backend
+                *audio_backend_init.lock().await = Some(backend);
+                
+                // Note: We can't start the event listener here because we don't have access to controller
+                // The controller will check and start it when needed
+                if event_channel.is_some() {
+                    // Backend initialized successfully
+                }
+            }
+            Err(e) => {
+                let model = model_for_init.lock().await;
+                model.set_error(format!("Audio init failed: {}", e)).await;
+            }
+        }
+    });
 
     let controller = AppController::new(model.clone(), audio_backend.clone());
 
-    // Start listening to librespot player events for real-time updates
-    controller.start_player_event_listener(player_event_channel);
-
-    // Initial refresh from Spotify API to get current track info
-    controller.refresh_playback().await;
-
-    // Load user's playlists
+    // Load user's playlists (fast API call)
     controller.load_user_playlists().await;
 
-    // Set initial volume to 70% via Spotify API
-    // Wait a bit for device to be fully registered
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let model_guard = model.lock().await;
-    if let Some(ref spotify) = model_guard.spotify {
-        if spotify.set_volume(70).await.is_ok() {
-            model_guard.set_volume(70).await;
-        }
-    }
-    drop(model_guard);
+    // Check current playback state in background (don't block UI)
+    let controller_for_init = controller.clone();
+    tokio::spawn(async move {
+        controller_for_init.initialize_playback().await;
+    });
 
     // Run the app
     let res = run_app(&mut terminal, model.clone(), controller).await;
@@ -103,9 +116,6 @@ async fn main() -> Result<()> {
     if let Err(err) = res {
         println!("Error: {:?}", err);
     }
-
-    // Keep audio backend alive until we exit
-    drop(audio_backend);
 
     Ok(())
 }

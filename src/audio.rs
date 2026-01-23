@@ -17,25 +17,25 @@ pub struct AudioPlayer {
     pub player: Arc<Player>,
     #[allow(dead_code)]
     session: Session,
-    #[allow(dead_code)]
     spirc: Spirc,
+    is_active: bool,
 }
 
-/// Wrapper to allow restarting the audio backend
+/// Wrapper for the audio backend
+/// The backend is created on startup but NOT activated until needed
+/// This allows fast startup while preserving existing Spotify playback state
 pub struct AudioBackend {
     inner: Mutex<Option<AudioPlayer>>,
     auth: AuthResult,
 }
 
 impl AudioPlayer {
-    pub async fn new(auth: AuthResult) -> Result<Self> {
-        Self::new_internal(auth, false).await
-    }
-
-    /// Create a new audio player, optionally in silent mode (no println output)
-    async fn new_internal(auth: AuthResult, silent: bool) -> Result<Self> {
+    /// Create a new audio player
+    /// - silent: don't print initialization messages (for TUI mode)
+    /// - activate: whether to activate the device immediately
+    async fn new_internal(auth: AuthResult, silent: bool, activate: bool) -> Result<Self> {
         if !silent {
-            println!("Connecting to Spotify with librespot...");
+            println!("Initializing audio backend...");
         }
 
         // Create session configuration
@@ -59,9 +59,6 @@ impl AudioPlayer {
         let sink_builder = audio_backend::find(None).unwrap();
         let mixer_builder = mixer::find(None).unwrap();
 
-        if !silent {
-            println!("... Connecting librespot");
-        }
         // Clone cache so we can still use auth later
         let session = Session::new(session_config, Some(auth.cache.clone()));
 
@@ -85,22 +82,37 @@ impl AudioPlayer {
         )
         .await?;
 
-        spirc.activate()?;
+        // Only activate if requested
+        let is_active = if activate {
+            spirc.activate()?;
+            true
+        } else {
+            false
+        };
 
         tokio::spawn(async move {
             let _spirc_task_res = spirc_task.await;
         });
 
         if !silent {
-            println!("✓ Audio player initialized!");
-            println!("  Device name: {}", DEVICE_NAME);
+            println!("✓ Audio backend ready: {}", DEVICE_NAME);
         }
 
         Ok(Self {
             player,
             session,
             spirc,
+            is_active,
         })
+    }
+
+    /// Activate the device (make it available for Spotify Connect)
+    pub fn activate(&mut self) -> Result<()> {
+        if !self.is_active {
+            self.spirc.activate()?;
+            self.is_active = true;
+        }
+        Ok(())
     }
 
     /// Get the player event channel for receiving playback state updates
@@ -122,15 +134,19 @@ impl AudioPlayer {
 }
 
 impl AudioBackend {
+    /// Create a new AudioBackend and initialize the player (but don't activate it)
+    /// This creates the librespot session but doesn't make it the active device
+    /// Call `activate()` later to make it available for playback
     pub async fn new(auth: AuthResult) -> Result<Self> {
-        let player = AudioPlayer::new(auth.clone()).await?;
+        // Create the player but don't activate it yet (silent mode - TUI may be active)
+        let player = AudioPlayer::new_internal(auth.clone(), true, false).await?;
         Ok(Self {
             inner: Mutex::new(Some(player)),
             auth,
         })
     }
 
-    /// Get the player event channel for receiving playback state updates
+    /// Get the player event channel
     pub async fn get_player_event_channel(&self) -> Option<PlayerEventChannel> {
         let guard = self.inner.lock().await;
         guard.as_ref().map(|p| p.get_player_event_channel())
@@ -140,7 +156,37 @@ impl AudioBackend {
         AudioPlayer::get_device_name()
     }
 
-    /// Restart the audio backend (silently, without breaking the TUI)
+    /// Check if the audio backend is currently initialized
+    pub async fn is_initialized(&self) -> bool {
+        self.inner.lock().await.is_some()
+    }
+
+    /// Check if the audio backend is activated (available for Spotify Connect)
+    pub async fn is_active(&self) -> bool {
+        let guard = self.inner.lock().await;
+        guard.as_ref().map(|p| p.is_active).unwrap_or(false)
+    }
+
+    /// Activate the local device (make it available for Spotify Connect)
+    /// This should be called when the user wants to play on the local device
+    pub async fn activate(&self) -> Result<()> {
+        let mut guard = self.inner.lock().await;
+        if let Some(player) = guard.as_mut() {
+            player.activate()?;
+        }
+        Ok(())
+    }
+
+    /// Stop the local audio playback (used when switching to another device)
+    pub async fn stop(&self) {
+        let guard = self.inner.lock().await;
+        if let Some(player) = guard.as_ref() {
+            player.player.stop();
+        }
+    }
+
+    /// Restart the audio backend (silently, for recovery)
+    /// Returns the player event channel for listening to playback events
     pub async fn restart(&self) -> Result<PlayerEventChannel> {
         // Drop the old player
         {
@@ -151,8 +197,8 @@ impl AudioBackend {
         // Small delay to ensure cleanup
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Create a new player in silent mode (no println output)
-        let new_player = AudioPlayer::new_internal(self.auth.clone(), true).await?;
+        // Create a new player and activate it (restart is for recovery, so activate)
+        let new_player = AudioPlayer::new_internal(self.auth.clone(), true, true).await?;
         let event_channel = new_player.get_player_event_channel();
 
         {

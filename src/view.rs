@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph},
     Frame,
 };
 use ratatui::widgets::Padding;
@@ -36,6 +36,11 @@ impl AppView {
         // Error notification overlay (if there's an error)
         if ui_state.error_message.is_some() {
             Self::render_error_notification(frame, ui_state);
+        }
+
+        // Device picker overlay (if open)
+        if ui_state.show_device_picker {
+            Self::render_device_picker(frame, ui_state);
         }
     }
 
@@ -118,6 +123,7 @@ impl AppView {
     }
 
     fn render_sidebar(frame: &mut Frame, area: Rect, ui_state: &UiState) {
+        // Library has 4 fixed items + 2 for borders = 6 lines
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -506,7 +512,7 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            "💿 {} by {} ({})\n{} tracks | Enter: Play from selected | Backspace: Go back",
+            " 💿 {} by {} ({})\n {} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.artist,
             detail.year,
@@ -514,10 +520,7 @@ impl AppView {
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default()
-            .padding(Padding::horizontal(1))
-            .borders(Borders::ALL)
-            .border_style(border_style));
+            .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Tracks - use scrollable list
@@ -570,17 +573,14 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            "📻 {} by {}\n{} tracks | Enter: Play from selected | Backspace: Go back",
+            " 📻 {} by {}\n {} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.owner,
             detail.tracks.len()
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default()
-            .padding(Padding::horizontal(1))
-            .borders(Borders::ALL)
-            .border_style(border_style));
+            .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Tracks - use scrollable list
@@ -640,15 +640,12 @@ impl AppView {
             format!(" | {}", detail.genres.join(", "))
         };
         let header_text = format!(
-            "🎤 {}{} | Press ←/→ to switch sections, Backspace to go back",
+            " {}{} | Press ←/→ to switch sections, Backspace to go back",
             detail.name, genres
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default()
-            .padding(Padding::horizontal(1))
-            .borders(Borders::ALL)
-            .border_style(border_style));
+            .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Content: Top tracks and Albums side by side
@@ -817,6 +814,9 @@ impl AppView {
                 height: popup_height,
             };
 
+            // Clear the area behind the popup first
+            frame.render_widget(Clear, popup_area);
+
             // Create error popup
             let error_text = format!("⚠ {}", error_msg);
             let error_widget = Paragraph::new(error_text)
@@ -836,6 +836,79 @@ impl AppView {
             frame.render_widget(error_widget, popup_area);
         }
     }
+
+    fn render_device_picker(frame: &mut Frame, ui_state: &UiState) {
+        let area = frame.area();
+
+        // Calculate popup size based on number of devices
+        let device_count = ui_state.available_devices.len();
+        let max_name_len = ui_state
+            .available_devices
+            .iter()
+            .map(|d| d.name.len() + 6) // icon + name + spacing
+            .max()
+            .unwrap_or(30);
+
+        let popup_width = (max_name_len as u16 + 6).min(60).max(35);
+        let popup_height = (device_count as u16 + 4).min(area.height - 4).max(6);
+
+        let popup_x = area.width.saturating_sub(popup_width) / 2;
+        let popup_y = area.height.saturating_sub(popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        // Clear the area behind the popup first
+        frame.render_widget(Clear, popup_area);
+
+        // Create device list items
+        let items: Vec<ListItem> = ui_state
+            .available_devices
+            .iter()
+            .enumerate()
+            .map(|(i, device)| {
+                let is_selected = i == ui_state.device_selected;
+                let is_active = device.is_active;
+
+                // Active indicator
+                let active_indicator = if is_active { " ●" } else { "" };
+
+                let text = format!("🎵 {}{}", device.name, active_indicator);
+
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_active {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                ListItem::new(text).style(style)
+            })
+            .collect();
+
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Select Device (↑↓ Enter Esc) ")
+                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .style(Style::default().bg(Color::Black)),
+        );
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(ui_state.device_selected));
+
+        frame.render_stateful_widget(list, popup_area, &mut list_state);
+    }
+
 
     /// Render a list of tracks (for Liked Songs, Recently Played)
     fn render_track_list(
