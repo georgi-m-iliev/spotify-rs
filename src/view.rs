@@ -506,7 +506,7 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            " 💿 {} by {} ({})\n {} tracks | Enter: Play from selected | Backspace: Go back",
+            "💿 {} by {} ({})\n{} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.artist,
             detail.year,
@@ -514,7 +514,10 @@ impl AppView {
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+            .block(Block::default()
+            .padding(Padding::horizontal(1))
+            .borders(Borders::ALL)
+            .border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Tracks - use scrollable list
@@ -567,14 +570,17 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            " 📻 {} by {}\n {} tracks | Enter: Play from selected | Backspace: Go back",
+            "📻 {} by {}\n{} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.owner,
             detail.tracks.len()
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+            .block(Block::default()
+            .padding(Padding::horizontal(1))
+            .borders(Borders::ALL)
+            .border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Tracks - use scrollable list
@@ -634,12 +640,15 @@ impl AppView {
             format!(" | {}", detail.genres.join(", "))
         };
         let header_text = format!(
-            " {}{} | Press ←/→ to switch sections, Backspace to go back",
+            "🎤 {}{} | Press ←/→ to switch sections, Backspace to go back",
             detail.name, genres
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+            .block(Block::default()
+            .padding(Padding::horizontal(1))
+            .borders(Borders::ALL)
+            .border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Content: Top tracks and Albums side by side
