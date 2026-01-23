@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use rspotify::{
-    model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, Country, AlbumId, PlaylistId, ArtistId},
+    model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, AlbumId, PlaylistId, ArtistId},
     prelude::*,
     AuthCodeSpotify,
 };
@@ -73,7 +73,6 @@ impl Default for UiState {
             active_section: ActiveSection::Search,
             search_query: String::new(),
             library_items: vec![
-                LibraryItem { name: "Made for you".to_string() },
                 LibraryItem { name: "Recently played".to_string() },
                 LibraryItem { name: "Liked songs".to_string() },
                 LibraryItem { name: "Albums".to_string() },
@@ -283,6 +282,26 @@ pub enum ContentView {
         track_index: usize,
         album_index: usize,
     },
+    /// Liked songs view (library)
+    LikedSongs {
+        tracks: Vec<SearchTrack>,
+        selected_index: usize,
+    },
+    /// Saved albums view (library)
+    SavedAlbums {
+        albums: Vec<SearchAlbum>,
+        selected_index: usize,
+    },
+    /// Followed artists view (library)
+    FollowedArtists {
+        artists: Vec<SearchArtist>,
+        selected_index: usize,
+    },
+    /// Recently played tracks view (library)
+    RecentlyPlayed {
+        tracks: Vec<SearchTrack>,
+        selected_index: usize,
+    },
 }
 
 /// Which section within artist detail is selected
@@ -405,7 +424,8 @@ impl SpotifyClient {
     pub async fn search(&self, query: &str, limit: u32) -> Result<SearchResults> {
         use rspotify::prelude::Id;
 
-        let market = Some(Market::Country(Country::UnitedStates));
+        // Use None for market to let Spotify use the user's account country
+        let market: Option<Market> = None;
         let mut results = SearchResults::default();
 
         // Search for tracks
@@ -575,8 +595,8 @@ impl SpotifyClient {
         let id = ArtistId::from_id(artist_id)?;
         let artist = self.client.artist(id.clone()).await?;
 
-        // Get top tracks
-        let market = Market::Country(Country::UnitedStates);
+        // Get top tracks - use FromToken to use user's account country
+        let market = Market::FromToken;
         let top_tracks_result = self.client.artist_top_tracks(id.clone(), Some(market)).await?;
 
         let top_tracks: Vec<SearchTrack> = top_tracks_result
@@ -627,7 +647,7 @@ impl SpotifyClient {
 
         self.client
             .start_uris_playback(
-                [rspotify::model::PlayableId::Track(rspotify::model::TrackId::from_id(track_id)?)],
+                [PlayableId::Track(rspotify::model::TrackId::from_id(track_id)?)],
                 device_id.as_deref(),
                 None,
                 None,
@@ -643,13 +663,13 @@ impl SpotifyClient {
         // Parse the URI to determine type
         let play_context = if uri.contains(":album:") {
             let id = uri.split(':').last().unwrap_or("");
-            rspotify::model::PlayContextId::Album(AlbumId::from_id(id)?)
+            PlayContextId::Album(AlbumId::from_id(id)?)
         } else if uri.contains(":playlist:") {
             let id = uri.split(':').last().unwrap_or("");
-            rspotify::model::PlayContextId::Playlist(PlaylistId::from_id(id)?)
+            PlayContextId::Playlist(PlaylistId::from_id(id)?)
         } else if uri.contains(":artist:") {
             let id = uri.split(':').last().unwrap_or("");
-            rspotify::model::PlayContextId::Artist(ArtistId::from_id(id)?)
+            PlayContextId::Artist(ArtistId::from_id(id)?)
         } else {
             return Err(anyhow::anyhow!("Unknown context type: {}", uri));
         };
@@ -667,13 +687,13 @@ impl SpotifyClient {
         // Parse the URI to determine type
         let play_context = if context_uri.contains(":album:") {
             let id = context_uri.split(':').last().unwrap_or("");
-            rspotify::model::PlayContextId::Album(AlbumId::from_id(id)?)
+            PlayContextId::Album(AlbumId::from_id(id)?)
         } else if context_uri.contains(":playlist:") {
             let id = context_uri.split(':').last().unwrap_or("");
-            rspotify::model::PlayContextId::Playlist(PlaylistId::from_id(id)?)
+            PlayContextId::Playlist(PlaylistId::from_id(id)?)
         } else if context_uri.contains(":artist:") {
             let id = context_uri.split(':').last().unwrap_or("");
-            rspotify::model::PlayContextId::Artist(ArtistId::from_id(id)?)
+            PlayContextId::Artist(ArtistId::from_id(id)?)
         } else {
             return Err(anyhow::anyhow!("Unknown context type: {}", context_uri));
         };
@@ -709,6 +729,103 @@ impl SpotifyClient {
             .collect();
 
         Ok(playlists)
+    }
+
+    /// Get user's liked songs (saved tracks)
+    pub async fn get_liked_songs(&self, limit: u32) -> Result<Vec<SearchTrack>> {
+        use futures::TryStreamExt;
+        use rspotify::prelude::Id;
+
+        let tracks_stream = self.client.current_user_saved_tracks(None);
+        let saved_tracks: Vec<_> = tracks_stream.try_collect().await?;
+
+        let tracks: Vec<SearchTrack> = saved_tracks
+            .into_iter()
+            .take(limit as usize)
+            .map(|saved| {
+                let track = saved.track;
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                SearchTrack {
+                    uri: format!("spotify:track:{}", track_id),
+                    id: track_id,
+                    name: track.name,
+                    artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: track.album.name,
+                    duration_ms: track.duration.num_milliseconds() as u32,
+                }
+            })
+            .collect();
+
+        Ok(tracks)
+    }
+
+    /// Get user's saved albums
+    pub async fn get_saved_albums(&self, limit: u32) -> Result<Vec<SearchAlbum>> {
+        use futures::TryStreamExt;
+        use rspotify::prelude::Id;
+
+        let albums_stream = self.client.current_user_saved_albums(None);
+        let saved_albums: Vec<_> = albums_stream.try_collect().await?;
+
+        let albums: Vec<SearchAlbum> = saved_albums
+            .into_iter()
+            .take(limit as usize)
+            .map(|saved| {
+                let album = saved.album;
+                SearchAlbum {
+                    id: album.id.id().to_string(),
+                    name: album.name,
+                    artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    year: album.release_date.chars().take(4).collect(),
+                    total_tracks: album.tracks.total,
+                }
+            })
+            .collect();
+
+        Ok(albums)
+    }
+
+    /// Get user's followed artists
+    pub async fn get_followed_artists(&self, limit: u32) -> Result<Vec<SearchArtist>> {
+        use rspotify::prelude::Id;
+
+        let result = self.client.current_user_followed_artists(None, Some(limit)).await?;
+
+        let artists: Vec<SearchArtist> = result.items
+            .into_iter()
+            .map(|artist| SearchArtist {
+                id: artist.id.id().to_string(),
+                name: artist.name,
+                genres: artist.genres,
+            })
+            .collect();
+
+        Ok(artists)
+    }
+
+    /// Get recently played tracks
+    pub async fn get_recently_played(&self, limit: u32) -> Result<Vec<SearchTrack>> {
+        use rspotify::prelude::Id;
+
+        let history = self.client.current_user_recently_played(Some(limit), None).await?;
+
+        let tracks: Vec<SearchTrack> = history.items
+            .into_iter()
+            .map(|item| {
+                let track = item.track;
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                SearchTrack {
+                    uri: format!("spotify:track:{}", track_id),
+                    id: track_id,
+                    name: track.name,
+                    artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: track.album.name,
+                    duration_ms: track.duration.num_milliseconds() as u32,
+                }
+            })
+            .collect();
+
+        Ok(tracks)
     }
 }
 
@@ -1153,6 +1270,46 @@ impl AppModel {
         state.is_loading = false;
     }
 
+    pub async fn set_liked_songs(&self, tracks: Vec<SearchTrack>) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.clear();
+        state.view = ContentView::LikedSongs {
+            tracks,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_saved_albums(&self, albums: Vec<SearchAlbum>) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.clear();
+        state.view = ContentView::SavedAlbums {
+            albums,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_followed_artists(&self, artists: Vec<SearchArtist>) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.clear();
+        state.view = ContentView::FollowedArtists {
+            artists,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    pub async fn set_recently_played(&self, tracks: Vec<SearchTrack>) {
+        let mut state = self.content_state.lock().await;
+        state.navigation_stack.clear();
+        state.view = ContentView::RecentlyPlayed {
+            tracks,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
     pub async fn set_content_loading(&self, loading: bool) {
         let mut state = self.content_state.lock().await;
         state.is_loading = loading;
@@ -1240,6 +1397,22 @@ impl AppModel {
                     *idx -= 1;
                 }
             }
+            ContentView::LikedSongs { selected_index, .. }
+            | ContentView::RecentlyPlayed { selected_index, .. } => {
+                if *selected_index > 0 {
+                    *selected_index -= 1;
+                }
+            }
+            ContentView::SavedAlbums { selected_index, .. } => {
+                if *selected_index > 0 {
+                    *selected_index -= 1;
+                }
+            }
+            ContentView::FollowedArtists { selected_index, .. } => {
+                if *selected_index > 0 {
+                    *selected_index -= 1;
+                }
+            }
             ContentView::Empty => {}
         }
     }
@@ -1288,6 +1461,26 @@ impl AppModel {
                 };
                 if *idx < max.saturating_sub(1) {
                     *idx += 1;
+                }
+            }
+            ContentView::LikedSongs { tracks, selected_index } => {
+                if *selected_index < tracks.len().saturating_sub(1) {
+                    *selected_index += 1;
+                }
+            }
+            ContentView::RecentlyPlayed { tracks, selected_index } => {
+                if *selected_index < tracks.len().saturating_sub(1) {
+                    *selected_index += 1;
+                }
+            }
+            ContentView::SavedAlbums { albums, selected_index } => {
+                if *selected_index < albums.len().saturating_sub(1) {
+                    *selected_index += 1;
+                }
+            }
+            ContentView::FollowedArtists { artists, selected_index } => {
+                if *selected_index < artists.len().saturating_sub(1) {
+                    *selected_index += 1;
                 }
             }
             ContentView::Empty => {}
@@ -1364,6 +1557,30 @@ impl AppModel {
                     }
                 }),
             },
+            ContentView::LikedSongs { tracks, selected_index } => {
+                tracks.get(*selected_index).map(|t| SelectedItem::Track {
+                    uri: t.uri.clone(),
+                    name: t.name.clone(),
+                })
+            }
+            ContentView::RecentlyPlayed { tracks, selected_index } => {
+                tracks.get(*selected_index).map(|t| SelectedItem::Track {
+                    uri: t.uri.clone(),
+                    name: t.name.clone(),
+                })
+            }
+            ContentView::SavedAlbums { albums, selected_index } => {
+                albums.get(*selected_index).map(|a| SelectedItem::Album {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                })
+            }
+            ContentView::FollowedArtists { artists, selected_index } => {
+                artists.get(*selected_index).map(|a| SelectedItem::Artist {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                })
+            }
             ContentView::Empty => None,
         }
     }

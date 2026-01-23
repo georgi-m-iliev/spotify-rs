@@ -121,8 +121,8 @@ impl AppView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(30), // Library
-                Constraint::Percentage(70), // Playlists
+                Constraint::Length(6), // Library (4 items + 2 border lines)
+                Constraint::Min(0),    // Playlists (fills remaining space)
             ])
             .split(area);
 
@@ -278,6 +278,46 @@ impl AppView {
                     *section,
                     *track_index,
                     *album_index,
+                    is_focused,
+                );
+            }
+            ContentView::LikedSongs { tracks, selected_index } => {
+                Self::render_track_list(
+                    frame,
+                    area,
+                    " Liked Songs ",
+                    tracks,
+                    *selected_index,
+                    is_focused,
+                );
+            }
+            ContentView::RecentlyPlayed { tracks, selected_index } => {
+                Self::render_track_list(
+                    frame,
+                    area,
+                    " Recently Played ",
+                    tracks,
+                    *selected_index,
+                    is_focused,
+                );
+            }
+            ContentView::SavedAlbums { albums, selected_index } => {
+                Self::render_album_list(
+                    frame,
+                    area,
+                    " Your Albums ",
+                    albums,
+                    *selected_index,
+                    is_focused,
+                );
+            }
+            ContentView::FollowedArtists { artists, selected_index } => {
+                Self::render_artist_list(
+                    frame,
+                    area,
+                    " Followed Artists ",
+                    artists,
+                    *selected_index,
                     is_focused,
                 );
             }
@@ -786,5 +826,149 @@ impl AppView {
 
             frame.render_widget(error_widget, popup_area);
         }
+    }
+
+    /// Render a list of tracks (for Liked Songs, Recently Played)
+    fn render_track_list(
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        tracks: &[crate::model::SearchTrack],
+        selected_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let list_items: Vec<ListItem> = tracks
+            .iter()
+            .enumerate()
+            .map(|(i, track)| {
+                let duration = Self::format_duration(track.duration_ms);
+                let style = if i == selected_index && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == selected_index {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("{} - {} [{}]", track.name, track.artist, duration)).style(style)
+            })
+            .collect();
+
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .padding(Padding::horizontal(1))
+                    .border_style(border_style),
+            )
+            .highlight_style(Style::default());
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_index));
+
+        frame.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// Render a list of albums (for Saved Albums)
+    fn render_album_list(
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        albums: &[crate::model::SearchAlbum],
+        selected_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let list_items: Vec<ListItem> = albums
+            .iter()
+            .enumerate()
+            .map(|(i, album)| {
+                let style = if i == selected_index && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == selected_index {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("{} - {} ({})", album.name, album.artist, album.year)).style(style)
+            })
+            .collect();
+
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .padding(Padding::horizontal(1))
+                    .border_style(border_style),
+            )
+            .highlight_style(Style::default());
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_index));
+
+        frame.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// Render a list of artists (for Followed Artists)
+    fn render_artist_list(
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        artists: &[crate::model::SearchArtist],
+        selected_index: usize,
+        is_focused: bool,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let list_items: Vec<ListItem> = artists
+            .iter()
+            .enumerate()
+            .map(|(i, artist)| {
+                let style = if i == selected_index && is_focused {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if i == selected_index {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let genres = if artist.genres.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", artist.genres.iter().take(2).cloned().collect::<Vec<_>>().join(", "))
+                };
+                ListItem::new(format!("{}{}", artist.name, genres)).style(style)
+            })
+            .collect();
+
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .padding(Padding::horizontal(1))
+                    .border_style(border_style),
+            )
+            .highlight_style(Style::default());
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_index));
+
+        frame.render_stateful_widget(list, area, &mut list_state);
     }
 }

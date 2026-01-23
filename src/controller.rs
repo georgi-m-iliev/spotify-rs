@@ -133,6 +133,13 @@ impl AppController {
                 // Handle Enter based on active section
                 let ui_state = model.get_ui_state().await;
                 match ui_state.active_section {
+                    ActiveSection::Library => {
+                        // Open selected library item
+                        let selected = ui_state.library_selected;
+                        drop(model);
+                        self.open_library_item(selected).await;
+                        return Ok(());
+                    }
                     ActiveSection::Playlists => {
                         // Open selected playlist
                         if let Some(playlist) = model.get_selected_playlist().await {
@@ -451,6 +458,72 @@ impl AppController {
                     let error_msg = Self::format_error(&e);
                     model.set_error(error_msg).await;
                 }
+            }
+        }
+    }
+
+    /// Open a library item by its index
+    /// 0 = Recently played, 1 = Liked songs, 2 = Albums, 3 = Artists
+    async fn open_library_item(&self, index: usize) {
+        let model = self.model.lock().await;
+        model.set_content_loading(true).await;
+
+        if let Some(spotify) = &model.spotify {
+            let result = match index {
+                0 => {
+                    // Recently played
+                    match spotify.get_recently_played(50).await {
+                        Ok(tracks) => {
+                            model.set_recently_played(tracks).await;
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                1 => {
+                    // Liked songs
+                    match spotify.get_liked_songs(100).await {
+                        Ok(tracks) => {
+                            model.set_liked_songs(tracks).await;
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                2 => {
+                    // Albums
+                    match spotify.get_saved_albums(50).await {
+                        Ok(albums) => {
+                            model.set_saved_albums(albums).await;
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                3 => {
+                    // Artists
+                    match spotify.get_followed_artists(50).await {
+                        Ok(artists) => {
+                            model.set_followed_artists(artists).await;
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                _ => {
+                    model.set_content_loading(false).await;
+                    return;
+                }
+            };
+
+            if let Err(e) = result {
+                model.set_content_loading(false).await;
+                let error_msg = Self::format_error(&e);
+                model.set_error(error_msg).await;
+            } else {
+                // Switch to MainContent section to show results
+                let mut ui_state = model.ui_state.lock().await;
+                ui_state.active_section = ActiveSection::MainContent;
             }
         }
     }
