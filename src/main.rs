@@ -18,7 +18,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use rspotify::{clients::OAuthClient, AuthCodeSpotify, Config, Token};
 
 use view::AppView;
-use audio::AudioPlayer;
+use audio::AudioBackend;
 use controller::AppController;
 use model::{AppModel, SpotifyClient};
 
@@ -29,10 +29,11 @@ async fn main() -> Result<()> {
     // Step 1: Get credentials and start librespot
     let auth_result = auth::perform_oauth_flow().await?;
 
-    let player = AudioPlayer::new(auth_result.clone()).await?;
+    let audio_backend = Arc::new(AudioBackend::new(auth_result.clone()).await?);
 
     // Get player event channel for real-time playback updates
-    let player_event_channel = player.get_player_event_channel();
+    let player_event_channel = audio_backend.get_player_event_channel().await
+        .expect("Failed to get player event channel");
 
     // Step 2: Authenticate with rspotify for API control
     let rspotify_client = setup_rspotify(auth_result.rspotify_token).await?;
@@ -46,7 +47,7 @@ async fn main() -> Result<()> {
     }
 
     // Create the SpotifyClient with our device name for targeting
-    let device_name = AudioPlayer::get_device_name().to_string();
+    let device_name = AudioBackend::get_device_name().to_string();
     let spotify_client = SpotifyClient::new(rspotify_client, Some(device_name.clone()));
 
     // Initialize model
@@ -69,7 +70,7 @@ async fn main() -> Result<()> {
     // Set device name in playback settings
     model.lock().await.update_device_name(device_name).await;
 
-    let controller = AppController::new(model.clone());
+    let controller = AppController::new(model.clone(), audio_backend.clone());
 
     // Start listening to librespot player events for real-time updates
     controller.start_player_event_listener(player_event_channel);
@@ -85,11 +86,8 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let model_guard = model.lock().await;
     if let Some(ref spotify) = model_guard.spotify {
-        if let Err(e) = spotify.set_volume(70).await {
-            eprintln!("Warning: Could not set initial volume: {}", e);
-        } else {
+        if spotify.set_volume(70).await.is_ok() {
             model_guard.set_volume(70).await;
-            println!("✓ Initial volume set to 70%");
         }
     }
     drop(model_guard);
@@ -106,8 +104,8 @@ async fn main() -> Result<()> {
         println!("Error: {:?}", err);
     }
 
-    // Keep audio player alive until we exit
-    drop(player);
+    // Keep audio backend alive until we exit
+    drop(audio_backend);
 
     Ok(())
 }

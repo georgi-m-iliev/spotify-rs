@@ -9,18 +9,34 @@ use librespot::playback::player::{Player, PlayerEventChannel};
 use librespot::playback::{audio_backend, mixer};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 const DEVICE_NAME: &str = "Spotify-RS";
 
 pub struct AudioPlayer {
     pub player: Arc<Player>,
+    #[allow(dead_code)]
     session: Session,
+    #[allow(dead_code)]
     spirc: Spirc,
+}
+
+/// Wrapper to allow restarting the audio backend
+pub struct AudioBackend {
+    inner: Mutex<Option<AudioPlayer>>,
+    auth: AuthResult,
 }
 
 impl AudioPlayer {
     pub async fn new(auth: AuthResult) -> Result<Self> {
-        println!("Connecting to Spotify with librespot...");
+        Self::new_internal(auth, false).await
+    }
+
+    /// Create a new audio player, optionally in silent mode (no println output)
+    async fn new_internal(auth: AuthResult, silent: bool) -> Result<Self> {
+        if !silent {
+            println!("Connecting to Spotify with librespot...");
+        }
 
         // Create session configuration
         let session_config = SessionConfig {
@@ -43,8 +59,11 @@ impl AudioPlayer {
         let sink_builder = audio_backend::find(None).unwrap();
         let mixer_builder = mixer::find(None).unwrap();
 
-        println!("... Connecting librespot");
-        let session = Session::new(session_config, Some(auth.cache));
+        if !silent {
+            println!("... Connecting librespot");
+        }
+        // Clone cache so we can still use auth later
+        let session = Session::new(session_config, Some(auth.cache.clone()));
 
         let mixer = mixer_builder(mixer_config)?;
 
@@ -55,10 +74,12 @@ impl AudioPlayer {
             move || sink_builder(None, audio_format),
         );
 
+        // Clone credentials so we can still use auth
+        let credentials = auth.librespot_credentials.clone();
         let (spirc, spirc_task) = Spirc::new(
             connect_config,
             session.clone(),
-            auth.librespot_credentials,
+            credentials,
             player.clone(),
             mixer,
         )
@@ -70,8 +91,10 @@ impl AudioPlayer {
             let _spirc_task_res = spirc_task.await;
         });
 
-        println!("✓ Audio player initialized!");
-        println!("  Device name: {}", DEVICE_NAME);
+        if !silent {
+            println!("✓ Audio player initialized!");
+            println!("  Device name: {}", DEVICE_NAME);
+        }
 
         Ok(Self {
             player,
@@ -96,8 +119,47 @@ impl AudioPlayer {
     pub fn get_device_name() -> &'static str {
         DEVICE_NAME
     }
+}
 
-    pub fn username(&self) -> String {
-        self.session.username()
+impl AudioBackend {
+    pub async fn new(auth: AuthResult) -> Result<Self> {
+        let player = AudioPlayer::new(auth.clone()).await?;
+        Ok(Self {
+            inner: Mutex::new(Some(player)),
+            auth,
+        })
+    }
+
+    /// Get the player event channel for receiving playback state updates
+    pub async fn get_player_event_channel(&self) -> Option<PlayerEventChannel> {
+        let guard = self.inner.lock().await;
+        guard.as_ref().map(|p| p.get_player_event_channel())
+    }
+
+    pub fn get_device_name() -> &'static str {
+        AudioPlayer::get_device_name()
+    }
+
+    /// Restart the audio backend (silently, without breaking the TUI)
+    pub async fn restart(&self) -> Result<PlayerEventChannel> {
+        // Drop the old player
+        {
+            let mut guard = self.inner.lock().await;
+            *guard = None;
+        }
+
+        // Small delay to ensure cleanup
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Create a new player in silent mode (no println output)
+        let new_player = AudioPlayer::new_internal(self.auth.clone(), true).await?;
+        let event_channel = new_player.get_player_event_channel();
+
+        {
+            let mut guard = self.inner.lock().await;
+            *guard = Some(new_player);
+        }
+
+        Ok(event_channel)
     }
 }

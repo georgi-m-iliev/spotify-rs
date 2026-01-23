@@ -5,17 +5,19 @@ use librespot::playback::player::{PlayerEvent, PlayerEventChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::audio::AudioBackend;
 use crate::model::{ActiveSection, AppModel, SelectedItem, TrackMetadata};
 
 pub const SEARCH_LIMIT: usize = 40;
 
 pub struct AppController {
     model: Arc<Mutex<AppModel>>,
+    audio_backend: Arc<AudioBackend>,
 }
 
 impl AppController {
-    pub fn new(model: Arc<Mutex<AppModel>>) -> Self {
-        Self { model }
+    pub fn new(model: Arc<Mutex<AppModel>>, audio_backend: Arc<AudioBackend>) -> Self {
+        Self { model, audio_backend }
     }
 
     pub async fn handle_key_event(&self, key: KeyEvent) -> Result<()> {
@@ -212,7 +214,18 @@ impl AppController {
             SelectedItem::Track { uri, .. } => {
                 // Play the track
                 if let Some(spotify) = &model.spotify {
-                    if let Err(e) = spotify.play_track(&uri).await {
+                    let spotify_clone = spotify.clone();
+                    let uri_clone = uri.clone();
+                    drop(model);
+
+                    let operation = move || {
+                        let spotify = spotify_clone.clone();
+                        let uri = uri_clone.clone();
+                        async move { spotify.play_track(&uri).await }
+                    };
+
+                    if let Err(e) = self.with_backend_recovery(operation).await {
+                        let model = self.model.lock().await;
                         let error_msg = Self::format_error(&e);
                         model.set_error(error_msg).await;
                     }
@@ -221,7 +234,20 @@ impl AppController {
             SelectedItem::PlaylistTrack { playlist_uri, track_uri, .. } => {
                 // Play playlist starting from selected track
                 if let Some(spotify) = &model.spotify {
-                    if let Err(e) = spotify.play_context_from_track_uri(&playlist_uri, &track_uri).await {
+                    let spotify_clone = spotify.clone();
+                    let playlist_uri_clone = playlist_uri.clone();
+                    let track_uri_clone = track_uri.clone();
+                    drop(model);
+
+                    let operation = move || {
+                        let spotify = spotify_clone.clone();
+                        let playlist_uri = playlist_uri_clone.clone();
+                        let track_uri = track_uri_clone.clone();
+                        async move { spotify.play_context_from_track_uri(&playlist_uri, &track_uri).await }
+                    };
+
+                    if let Err(e) = self.with_backend_recovery(operation).await {
+                        let model = self.model.lock().await;
                         let error_msg = Self::format_error(&e);
                         model.set_error(error_msg).await;
                     }
@@ -230,7 +256,20 @@ impl AppController {
             SelectedItem::AlbumTrack { album_uri, track_uri, .. } => {
                 // Play album starting from selected track
                 if let Some(spotify) = &model.spotify {
-                    if let Err(e) = spotify.play_context_from_track_uri(&album_uri, &track_uri).await {
+                    let spotify_clone = spotify.clone();
+                    let album_uri_clone = album_uri.clone();
+                    let track_uri_clone = track_uri.clone();
+                    drop(model);
+
+                    let operation = move || {
+                        let spotify = spotify_clone.clone();
+                        let album_uri = album_uri_clone.clone();
+                        let track_uri = track_uri_clone.clone();
+                        async move { spotify.play_context_from_track_uri(&album_uri, &track_uri).await }
+                    };
+
+                    if let Err(e) = self.with_backend_recovery(operation).await {
+                        let model = self.model.lock().await;
                         let error_msg = Self::format_error(&e);
                         model.set_error(error_msg).await;
                     }
@@ -292,14 +331,24 @@ impl AppController {
 
         if let Some(spotify) = &model.spotify {
             let is_playing = model.is_playing().await;
+            let spotify_clone = spotify.clone();
 
-            let result = if is_playing {
-                spotify.pause().await
-            } else {
-                spotify.play().await
+            drop(model); // Release lock before potentially slow operations
+
+            let operation = move || {
+                let spotify = spotify_clone.clone();
+                let playing = is_playing;
+                async move {
+                    if playing {
+                        spotify.pause().await
+                    } else {
+                        spotify.play().await
+                    }
+                }
             };
 
-            if let Err(e) = result {
+            if let Err(e) = self.with_backend_recovery(operation).await {
+                let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             }
@@ -311,7 +360,16 @@ impl AppController {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            if let Err(e) = spotify.next_track().await {
+            let spotify_clone = spotify.clone();
+            drop(model);
+
+            let operation = move || {
+                let spotify = spotify_clone.clone();
+                async move { spotify.next_track().await }
+            };
+
+            if let Err(e) = self.with_backend_recovery(operation).await {
+                let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             }
@@ -323,7 +381,16 @@ impl AppController {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            if let Err(e) = spotify.previous_track().await {
+            let spotify_clone = spotify.clone();
+            drop(model);
+
+            let operation = move || {
+                let spotify = spotify_clone.clone();
+                async move { spotify.previous_track().await }
+            };
+
+            if let Err(e) = self.with_backend_recovery(operation).await {
+                let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             }
@@ -533,7 +600,18 @@ impl AppController {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            if let Err(e) = spotify.play_context(uri).await {
+            let spotify_clone = spotify.clone();
+            let uri_clone = uri.to_string();
+            drop(model);
+
+            let operation = move || {
+                let spotify = spotify_clone.clone();
+                let uri = uri_clone.clone();
+                async move { spotify.play_context(&uri).await }
+            };
+
+            if let Err(e) = self.with_backend_recovery(operation).await {
+                let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             }
@@ -545,7 +623,20 @@ impl AppController {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
-            if let Err(e) = spotify.play_context_from_track_uri(playlist_uri, track_uri).await {
+            let spotify_clone = spotify.clone();
+            let playlist_uri_clone = playlist_uri.to_string();
+            let track_uri_clone = track_uri.to_string();
+            drop(model);
+
+            let operation = move || {
+                let spotify = spotify_clone.clone();
+                let playlist_uri = playlist_uri_clone.clone();
+                let track_uri = track_uri_clone.clone();
+                async move { spotify.play_context_from_track_uri(&playlist_uri, &track_uri).await }
+            };
+
+            if let Err(e) = self.with_backend_recovery(operation).await {
+                let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             }
@@ -570,6 +661,70 @@ impl AppController {
         } else {
             // Generic error message
             format!("Error: {}", error_str)
+        }
+    }
+
+    /// Check if the error indicates the audio backend needs to be restarted
+    fn is_device_unavailable_error(error: &anyhow::Error) -> bool {
+        let error_str = error.to_string().to_lowercase();
+        error_str.contains("404")
+            || error_str.contains("no active device")
+            || error_str.contains("device not found")
+            || error_str.contains("player command failed")
+    }
+
+    /// Try to restart the audio backend and return a new event channel if successful
+    pub async fn try_restart_audio_backend(&self) -> Option<PlayerEventChannel> {
+        {
+            let model = self.model.lock().await;
+            model.set_error("Reconnecting audio...".to_string()).await;
+        }
+
+        match self.audio_backend.restart().await {
+            Ok(event_channel) => {
+                // Wait a bit for device registration with Spotify
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+                {
+                    let model = self.model.lock().await;
+                    model.clear_error().await;
+                }
+                Some(event_channel)
+            }
+            Err(e) => {
+                let model = self.model.lock().await;
+                model.set_error(format!("Audio reconnect failed: {}", e)).await;
+                None
+            }
+        }
+    }
+
+    /// Execute a playback operation with automatic backend recovery on failure
+    async fn with_backend_recovery<F, Fut>(&self, operation: F) -> Result<()>
+    where
+        F: Fn() -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
+        // First attempt
+        match operation().await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                // Check if this is a device unavailable error
+                if Self::is_device_unavailable_error(&e) {
+                    // Try to restart the backend
+                    if let Some(event_channel) = self.try_restart_audio_backend().await {
+                        // Start listening to events from the new backend
+                        self.start_player_event_listener(event_channel);
+
+                        // Wait a bit more for stability
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+                        // Retry the operation
+                        return operation().await;
+                    }
+                }
+                Err(e)
+            }
         }
     }
 
