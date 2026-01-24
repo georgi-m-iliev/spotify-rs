@@ -110,6 +110,7 @@ pub struct SearchTrack {
     pub album: String,
     pub duration_ms: u32,
     pub uri: String,
+    pub liked: bool,
 }
 
 /// An album from search results
@@ -494,6 +495,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
+                    liked: false, // TODO: Check if track is liked
                 });
             }
         }
@@ -560,6 +562,7 @@ impl SpotifyClient {
                 artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                 album: album.name.clone(),
                 duration_ms: track.duration.num_milliseconds() as u32,
+                liked: false, // TODO: Check if track is liked
             });
         }
 
@@ -592,6 +595,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name.clone(),
                     duration_ms: track.duration.num_milliseconds() as u32,
+                    liked: false, // TODO: Check if track is liked
                 });
             }
         }
@@ -629,6 +633,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
+                    liked: false, // TODO: Check if track is liked
                 }
             })
             .collect();
@@ -774,6 +779,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
+                    liked: true, // These are liked songs by definition
                 }
             })
             .collect();
@@ -843,6 +849,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
+                    liked: false, // TODO: Check if track is liked
                 }
             })
             .collect();

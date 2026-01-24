@@ -396,10 +396,35 @@ impl AppView {
             );
         frame.render_widget(tabs, chunks[0]);
 
+        // Calculate available width for content (subtract borders and padding)
+        let content_width = chunks[1].width.saturating_sub(4) as usize;
+
+        // Calculate column widths dynamically for tracks
+        let num_width = 3;
+        let liked_width = 2;
+        let duration_width = 8;
+        let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
+        let remaining_width = content_width.saturating_sub(fixed_width);
+        let title_width = (remaining_width * 55) / 100;
+        let artist_width = remaining_width.saturating_sub(title_width);
+
         // Render the selected category's results
         let list_items: Vec<ListItem> = match section {
             SearchResultSection::Tracks => {
-                results.tracks.iter().enumerate().map(|(i, track)| {
+                // Create header as first item
+                let mut items = vec![
+                    ListItem::new(format!(
+                        "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                        "#", " ", "Title", "Artist", "Duration",
+                        num_width = num_width,
+                        title_width = title_width,
+                        artist_width = artist_width
+                    ))
+                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                ];
+
+                // Add track items
+                let track_items: Vec<ListItem> = results.tracks.iter().enumerate().map(|(i, track)| {
                     let duration = Self::format_duration(track.duration_ms);
                     let style = if i == track_index && is_focused {
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
@@ -408,8 +433,27 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(format!("{} - {} [{}]", track.name, track.artist, duration)).style(style)
-                }).collect()
+
+                    let liked_indicator = if track.liked { "💚" } else { "  " };
+                    let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+
+                    let title_str = if track.name.len() > title_width {
+                        format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                    } else {
+                        format!("{:<width$}", track.name, width = title_width)
+                    };
+
+                    let artist_str = if track.artist.len() > artist_width {
+                        format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                    } else {
+                        format!("{:<width$}", track.artist, width = artist_width)
+                    };
+
+                    ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
+                }).collect();
+
+                items.extend(track_items);
+                items
             }
             SearchResultSection::Albums => {
                 results.albums.iter().enumerate().map(|(i, album)| {
@@ -474,7 +518,7 @@ impl AppView {
         } else {
             // Determine selected index based on section
             let selected_index = match section {
-                SearchResultSection::Tracks => track_index,
+                SearchResultSection::Tracks => track_index + 1, // +1 for header row
                 SearchResultSection::Albums => album_index,
                 SearchResultSection::Artists => artist_index,
                 SearchResultSection::Playlists => playlist_index,
@@ -523,8 +567,30 @@ impl AppView {
             .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
-        // Tracks - use scrollable list
-        let track_items: Vec<ListItem> = detail
+        // Calculate available width for content
+        let content_width = chunks[1].width.saturating_sub(4) as usize;
+        let num_width = 3;
+        let liked_width = 2;
+        let duration_width = 8;
+        let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
+        let remaining_width = content_width.saturating_sub(fixed_width);
+        let title_width = (remaining_width * 55) / 100;
+        let artist_width = remaining_width.saturating_sub(title_width);
+
+        // Create header as first item
+        let mut track_items: Vec<ListItem> = vec![
+            ListItem::new(format!(
+                "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", " ", "Title", "Artist", "Duration",
+                num_width = num_width,
+                title_width = title_width,
+                artist_width = artist_width
+            ))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ];
+
+        // Add track items
+        let tracks: Vec<ListItem> = detail
             .tracks
             .iter()
             .enumerate()
@@ -537,9 +603,27 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!("{}. {} [{}]", i + 1, track.name, duration)).style(style)
+
+                let liked_indicator = if track.liked { "💚" } else { "  " };
+                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+
+                let title_str = if track.name.len() > title_width {
+                    format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.name, width = title_width)
+                };
+
+                let artist_str = if track.artist.len() > artist_width {
+                    format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.artist, width = artist_width)
+                };
+
+                ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
             })
             .collect();
+
+        track_items.extend(tracks);
 
         let tracks_block = Block::default()
             .borders(Borders::ALL)
@@ -547,7 +631,7 @@ impl AppView {
             .padding(Padding::horizontal(1))
             .border_style(border_style);
 
-        Self::render_scrollable_list(frame, chunks[1], track_items, selected_index, tracks_block);
+        Self::render_scrollable_list(frame, chunks[1], track_items, selected_index + 1, tracks_block); // +1 for header
     }
 
     fn render_playlist_detail(
@@ -583,8 +667,30 @@ impl AppView {
             .block(Block::default().borders(Borders::ALL).border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
-        // Tracks - use scrollable list
-        let track_items: Vec<ListItem> = detail
+        // Calculate available width for content
+        let content_width = chunks[1].width.saturating_sub(4) as usize;
+        let num_width = 3;
+        let liked_width = 2;
+        let duration_width = 8;
+        let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
+        let remaining_width = content_width.saturating_sub(fixed_width);
+        let title_width = (remaining_width * 55) / 100;
+        let artist_width = remaining_width.saturating_sub(title_width);
+
+        // Create header as first item
+        let mut track_items: Vec<ListItem> = vec![
+            ListItem::new(format!(
+                "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", " ", "Title", "Artist", "Duration",
+                num_width = num_width,
+                title_width = title_width,
+                artist_width = artist_width
+            ))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ];
+
+        // Add track items
+        let tracks: Vec<ListItem> = detail
             .tracks
             .iter()
             .enumerate()
@@ -597,9 +703,27 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!("{} - {} [{}]", track.name, track.artist, duration)).style(style)
+
+                let liked_indicator = if track.liked { "💚" } else { "  " };
+                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+
+                let title_str = if track.name.len() > title_width {
+                    format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.name, width = title_width)
+                };
+
+                let artist_str = if track.artist.len() > artist_width {
+                    format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.artist, width = artist_width)
+                };
+
+                ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
             })
             .collect();
+
+        track_items.extend(tracks);
 
         let tracks_block = Block::default()
             .borders(Borders::ALL)
@@ -607,7 +731,7 @@ impl AppView {
             .padding(Padding::horizontal(1))
             .border_style(border_style);
 
-        Self::render_scrollable_list(frame, chunks[1], track_items, selected_index, tracks_block);
+        Self::render_scrollable_list(frame, chunks[1], track_items, selected_index + 1, tracks_block); // +1 for header
     }
 
     fn render_artist_detail(
@@ -657,8 +781,27 @@ impl AppView {
             ])
             .split(chunks[1]);
 
-        // Top tracks
-        let track_items: Vec<ListItem> = detail
+        // Calculate available width for track content
+        let track_content_width = content_chunks[0].width.saturating_sub(4) as usize;
+        let num_width = 3;
+        let liked_width = 2;
+        let duration_width = 8;
+        let fixed_track_width = num_width + 3 + liked_width + 3 + 3 + duration_width;
+        let title_width_artist = track_content_width.saturating_sub(fixed_track_width);
+
+        // Create header as first item
+        let mut track_items: Vec<ListItem> = vec![
+            ListItem::new(format!(
+                "{:<num_width$}   {}   {:<title_width_artist$}   {}",
+                "#", " ", "Title", "Duration",
+                num_width = num_width,
+                title_width_artist = title_width_artist
+            ))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ];
+
+        // Add track items
+        let tracks: Vec<ListItem> = detail
             .top_tracks
             .iter()
             .enumerate()
@@ -671,9 +814,21 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!("{}. {} [{}]", i + 1, track.name, duration)).style(style)
+
+                let liked_indicator = if track.liked { "💚" } else { "  " };
+                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+
+                let title_str = if track.name.len() > title_width_artist {
+                    format!("{:.width$}...", track.name, width = title_width_artist.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.name, width = title_width_artist)
+                };
+
+                ListItem::new(format!("{}   {}   {}   {}", track_num, liked_indicator, title_str, duration)).style(style)
             })
             .collect();
+
+        track_items.extend(tracks);
 
         let tracks_border = if section == ArtistDetailSection::TopTracks && is_focused {
             Style::default().fg(Color::Green)
@@ -687,7 +842,7 @@ impl AppView {
             .padding(Padding::horizontal(1))
             .border_style(tracks_border);
 
-        Self::render_scrollable_list(frame, content_chunks[0], track_items, track_index, tracks_block);
+        Self::render_scrollable_list(frame, content_chunks[0], track_items, track_index + 1, tracks_block); // +1 for header
 
         // Albums
         let album_items: Vec<ListItem> = detail
@@ -925,7 +1080,34 @@ impl AppView {
             Style::default()
         };
 
-        let list_items: Vec<ListItem> = tracks
+        // Calculate available width for content (subtract borders and padding)
+        let content_width = area.width.saturating_sub(4) as usize; // 2 for borders, 2 for padding
+
+        // Calculate column widths dynamically based on available space
+        // Format: "#(3) [SPACE](3) LIKED(2) [SPACE](3) TITLE [SPACE](3) ARTIST [SPACE](3) DURATION(8)"
+        let num_width = 3;
+        let liked_width = 2;
+        let duration_width = 8;
+        let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width; // Total fixed + spaces
+
+        let remaining_width = content_width.saturating_sub(fixed_width);
+        let title_width = (remaining_width * 55) / 100; // 55% for title
+        let artist_width = remaining_width.saturating_sub(title_width); // Rest for artist
+
+        // Create header as first item
+        let mut list_items: Vec<ListItem> = vec![
+            ListItem::new(format!(
+                "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", " ", "Title", "Artist", "Duration",
+                num_width = num_width,
+                title_width = title_width,
+                artist_width = artist_width
+            ))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ];
+
+        // Add track items
+        let track_items: Vec<ListItem> = tracks
             .iter()
             .enumerate()
             .map(|(i, track)| {
@@ -937,9 +1119,27 @@ impl AppView {
                 } else {
                     Style::default()
                 };
-                ListItem::new(format!("{} - {} [{}]", track.name, track.artist, duration)).style(style)
+
+                let liked_indicator = if track.liked { "💚" } else { "  " };
+                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+
+                let title_str = if track.name.len() > title_width {
+                    format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.name, width = title_width)
+                };
+
+                let artist_str = if track.artist.len() > artist_width {
+                    format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                } else {
+                    format!("{:<width$}", track.artist, width = artist_width)
+                };
+
+                ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
             })
             .collect();
+
+        list_items.extend(track_items);
 
         let list = List::new(list_items)
             .block(
@@ -952,7 +1152,8 @@ impl AppView {
             .highlight_style(Style::default());
 
         let mut list_state = ListState::default();
-        list_state.select(Some(selected_index));
+        // Adjust selected index by +1 since header is now item 0
+        list_state.select(Some(selected_index + 1));
 
         frame.render_stateful_widget(list, area, &mut list_state);
     }
