@@ -1,6 +1,7 @@
 mod audio;
 mod auth;
 mod controller;
+mod logging;
 mod model;
 mod view;
 
@@ -16,6 +17,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use rspotify::{clients::OAuthClient, AuthCodeSpotify, Config, Token};
+use tracing::{debug, error, info, warn};
 
 use view::AppView;
 use audio::AudioBackend;
@@ -24,7 +26,12 @@ use model::{AppModel, SpotifyClient};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("=== Spotify-RS Client ===\n");
+    // Initialize file-based logging first
+    if let Err(e) = logging::init_logging() {
+        eprintln!("Warning: Failed to initialize logging: {}", e);
+    }
+
+    info!("=== Spotify-RS Client Starting ===");
 
     // Step 1: Get credentials
     let auth_result = auth::perform_oauth_flow().await?;
@@ -33,9 +40,9 @@ async fn main() -> Result<()> {
     let rspotify_client = setup_rspotify(auth_result.rspotify_token.clone()).await?;
 
     match rspotify_client.me().await {
-        Ok(user) => println!("✓ Rspotify authorized as: {}", user.id.to_string()),
+        Ok(user) => info!(user_id = %user.id, "Rspotify authorized successfully"),
         Err(e) => {
-            eprintln!("❌ Rspotify authentication failed: {}", e);
+            error!(error = %e, "Rspotify authentication failed");
             return Err(anyhow::anyhow!("Rspotify init failed"));
         }
     }
@@ -50,11 +57,12 @@ async fn main() -> Result<()> {
     // If cache wasn't loaded from disk, refresh synchronously (first run)
     // Otherwise refresh in background
     if !cache_loaded || !std::path::Path::new(".cache/liked_songs.json").exists() {
-        println!("Loading liked songs...");
+        info!("Loading liked songs from API (first run or cache miss)...");
         if let Err(e) = spotify_client.refresh_liked_songs_cache().await {
-            eprintln!("Warning: Could not load liked songs: {}", e);
+            warn!(error = %e, "Could not load liked songs");
         }
     } else {
+        debug!("Liked songs cache found, refreshing in background");
         // Refresh liked songs cache in background (async API call)
         let spotify_for_cache = spotify_client.clone();
         tokio::spawn(async move {
@@ -66,7 +74,7 @@ async fn main() -> Result<()> {
     let mut app_model = AppModel::new();
     app_model.set_spotify_client(spotify_client.clone());
 
-    println!("\nStarting TUI...\n");
+    info!("Starting TUI...");
 
     // Setup terminal FIRST - show UI immediately
     enable_raw_mode()?;
@@ -132,9 +140,10 @@ async fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        println!("Error: {:?}", err);
+        error!(error = ?err, "Application error");
     }
 
+    info!("Spotify-RS Client shutting down");
     Ok(())
 }
 
@@ -149,10 +158,10 @@ async fn setup_rspotify(access_token: Token) -> Result<AuthCodeSpotify> {
         },
     );
 
-    println!("✓ Rspotify Initialized");
+    debug!("Rspotify client initialized");
 
     *spotify.token.lock().await.unwrap() = Some(access_token);
-    println!("✓ Rspotify Token Set");
+    debug!("Rspotify token set");
     Ok(spotify)
 }
 

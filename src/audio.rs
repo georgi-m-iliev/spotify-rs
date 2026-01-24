@@ -10,6 +10,7 @@ use librespot::playback::{audio_backend, mixer};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tracing::{debug, info};
 
 const DEVICE_NAME: &str = "Spotify-RS";
 
@@ -35,8 +36,9 @@ impl AudioPlayer {
     /// - activate: whether to activate the device immediately
     async fn new_internal(auth: AuthResult, silent: bool, activate: bool) -> Result<Self> {
         if !silent {
-            println!("Initializing audio backend...");
+            info!("Initializing audio backend...");
         }
+        debug!(device_name = DEVICE_NAME, "Creating audio player");
 
         // Create session configuration
         let session_config = SessionConfig {
@@ -85,6 +87,7 @@ impl AudioPlayer {
         // Only activate if requested
         let is_active = if activate {
             spirc.activate()?;
+            debug!("Audio device activated");
             true
         } else {
             false
@@ -95,8 +98,9 @@ impl AudioPlayer {
         });
 
         if !silent {
-            println!("✓ Audio backend ready: {}", DEVICE_NAME);
+            info!(device_name = DEVICE_NAME, "Audio backend ready");
         }
+        debug!(device_id = %Self::get_device_id(), is_active, "Audio player created");
 
         Ok(Self {
             player,
@@ -111,6 +115,7 @@ impl AudioPlayer {
         if !self.is_active {
             self.spirc.activate()?;
             self.is_active = true;
+            info!(device_name = DEVICE_NAME, "Audio device activated for Spotify Connect");
         }
         Ok(())
     }
@@ -188,6 +193,7 @@ impl AudioBackend {
     /// Restart the audio backend (silently, for recovery)
     /// Returns the player event channel for listening to playback events
     pub async fn restart(&self) -> Result<PlayerEventChannel> {
+        info!("Restarting audio backend for recovery");
         // Drop the old player
         {
             let mut guard = self.inner.lock().await;
@@ -206,6 +212,7 @@ impl AudioBackend {
             *guard = Some(new_player);
         }
 
+        info!("Audio backend restarted successfully");
         Ok(event_channel)
     }
 }

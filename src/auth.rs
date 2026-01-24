@@ -2,6 +2,7 @@ use std::fs;
 use chrono::Utc;
 use anyhow::Result;
 use std::collections::HashSet;
+use tracing::{debug, info, warn};
 
 use rspotify::Token;
 use librespot::core::{authentication::Credentials, cache::Cache};
@@ -30,6 +31,7 @@ pub struct AuthResult {
 }
 
 async fn perform_browser_auth() -> Result<(Credentials, String)> {
+    info!("Starting browser-based OAuth flow");
     let client = librespot_oauth::OAuthClientBuilder::new(
         SPOTIFY_CLIENT_ID,
         SPOTIFY_REDIRECT_URI,
@@ -48,9 +50,10 @@ async fn perform_browser_auth() -> Result<(Credentials, String)> {
     let refresh_token = &token.refresh_token;
 
     let _ = fs::write(REFRESH_TOKEN_FILE, refresh_token);
-    println!("✓ Saved refresh token to disk");
+    debug!("Saved refresh token to disk");
 
     let credentials = Credentials::with_access_token(token.access_token.clone());
+    info!("Browser authentication completed successfully");
     Ok((credentials, token.access_token))
 }
 
@@ -61,7 +64,7 @@ pub async fn perform_oauth_flow() -> Result<AuthResult> {
 
     let (credentials, access_token) =
         if let (Some(creds), Some(refresh_token)) = (cache.credentials(), stored_refresh_token) {
-            println!("✓ Found cached Librespot credentials AND Refresh Token!");
+            info!("Found cached Librespot credentials and refresh token");
 
             let oauth_client = librespot_oauth::OAuthClientBuilder::new(
                 SPOTIFY_CLIENT_ID,
@@ -74,16 +77,17 @@ pub async fn perform_oauth_flow() -> Result<AuthResult> {
                 Ok(new_token) => {
                     let rt = &new_token.refresh_token;
                     let _ = fs::write(REFRESH_TOKEN_FILE, rt);
+                    debug!("Token refreshed successfully");
 
                     (creds, new_token.access_token)
                 }
                 Err(e) => {
-                    eprintln!("⚠ Cached refresh token failed: {}. Re-authenticating...", e);
+                    warn!(error = %e, "Cached refresh token failed, re-authenticating");
                     perform_browser_auth().await?
                 }
             }
         } else {
-            println!("⚠ Missing cache or token. Starting Browser Authentication...");
+            info!("No cached credentials found, starting browser authentication");
             perform_browser_auth().await?
         };
 

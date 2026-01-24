@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tracing::{debug, info, trace};
 use rspotify::{
     model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, AlbumId, PlaylistId, ArtistId},
     prelude::*,
@@ -474,6 +475,8 @@ impl SpotifyClient {
         use futures::StreamExt;
         use rspotify::prelude::Id;
 
+        debug!("Refreshing liked songs cache from API");
+
         // Fetch all liked songs from API
         let tracks_stream = self.client.current_user_saved_tracks(None);
         let saved_tracks: Vec<_> = tracks_stream
@@ -485,6 +488,8 @@ impl SpotifyClient {
             .into_iter()
             .filter_map(|saved| saved.track.id.map(|id| id.id().to_string()))
             .collect();
+
+        info!(count = track_ids.len(), "Liked songs cache refreshed");
 
         // Update cache
         self.liked_songs_cache.update(track_ids).await;
@@ -508,7 +513,16 @@ impl SpotifyClient {
     }
 
     pub async fn get_current_playback(&self) -> Result<Option<CurrentPlaybackContext>> {
-        Ok(self.client.current_playback(None, None::<Vec<_>>).await?)
+        trace!("Fetching current playback state");
+        let result = self.client.current_playback(None, None::<Vec<_>>).await?;
+        if let Some(ref playback) = result {
+            trace!(
+                is_playing = playback.is_playing,
+                device = ?playback.device.name,
+                "Got playback state"
+            );
+        }
+        Ok(result)
     }
 
     /// Get the device ID for the currently active device
@@ -529,6 +543,7 @@ impl SpotifyClient {
 
     pub async fn play(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(device_id = ?device_id, "API: resume_playback");
         self.client
             .resume_playback(device_id.as_deref(), None)
             .await?;
@@ -537,30 +552,35 @@ impl SpotifyClient {
 
     pub async fn pause(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(device_id = ?device_id, "API: pause_playback");
         self.client.pause_playback(device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn next_track(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(device_id = ?device_id, "API: next_track");
         self.client.next_track(device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn previous_track(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(device_id = ?device_id, "API: previous_track");
         self.client.previous_track(device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn set_shuffle(&self, state: bool) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(state, device_id = ?device_id, "API: set_shuffle");
         self.client.shuffle(state, device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn set_repeat(&self, state: RepeatState) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(state = ?state, device_id = ?device_id, "API: set_repeat");
         let repeat_state = match state {
             RepeatState::Off => rspotify::model::RepeatState::Off,
             RepeatState::All => rspotify::model::RepeatState::Context,
@@ -572,14 +592,16 @@ impl SpotifyClient {
 
     pub async fn set_volume(&self, volume: u8) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(volume, device_id = ?device_id, "API: set_volume");
         self.client.volume(volume, device_id.as_deref()).await?;
         Ok(())
     }
 
     /// Get list of available playback devices
     pub async fn get_available_devices(&self) -> Result<Vec<DeviceInfo>> {
+        debug!("API: get_available_devices");
         let devices = self.client.device().await?;
-        Ok(devices
+        let device_infos: Vec<DeviceInfo> = devices
             .into_iter()
             .map(|d| DeviceInfo {
                 id: d.id.unwrap_or_default(),
@@ -587,7 +609,9 @@ impl SpotifyClient {
                 is_active: d.is_active,
                 volume_percent: d.volume_percent.map(|v| v as u8),
             })
-            .collect())
+            .collect();
+        debug!(count = device_infos.len(), "Found devices");
+        Ok(device_infos)
     }
 
     /// Check if there's any active device available for playback
@@ -601,6 +625,7 @@ impl SpotifyClient {
 
     /// Transfer playback to a specific device
     pub async fn transfer_playback_to_device(&self, device_id: &str, start_playing: bool) -> Result<()> {
+        debug!(device_id, start_playing, "API: transfer_playback");
         self.client
             .transfer_playback(device_id, Some(start_playing))
             .await?;
