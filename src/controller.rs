@@ -675,11 +675,13 @@ impl AppController {
     /// If no device is active, activates the local audio backend
     /// Returns true if a device is available
     pub async fn ensure_device_available(&self) -> bool {
+        debug!("Checking for available playback device");
         // First check if our local backend is already active
         {
             let backend_guard = self.audio_backend.lock().await;
             if let Some(backend) = backend_guard.as_ref() {
                 if backend.is_active().await {
+                    debug!("Local backend already active");
                     return true;
                 }
             }
@@ -690,11 +692,13 @@ impl AppController {
             let model = self.model.lock().await;
             if let Some(spotify) = &model.spotify {
                 if spotify.has_active_device().await {
+                    debug!("Found active device on Spotify");
                     return true;
                 }
             }
         }
 
+        debug!("No active device found, activating local backend");
         // No active device - wait for backend to be ready (up to 5 seconds)
         for _ in 0..50 {
             let backend_guard = self.audio_backend.lock().await;
@@ -717,15 +721,36 @@ impl AppController {
                     
                     // Update device name
                     let model = self.model.lock().await;
-                    model.update_device_name(crate::audio::AudioBackend::get_device_name().to_string()).await;
+                    let local_device_name = crate::audio::AudioBackend::get_device_name().to_string();
+                    model.update_device_name(local_device_name.clone()).await;
 
-                    // Give it a moment to register with Spotify
+                    // Give it time to register with Spotify Connect
                     drop(model);
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
+                    // Transfer playback to our local device to make it active
+                    let model = self.model.lock().await;
+                    if let Some(spotify) = &model.spotify {
+                        // Find our device by name
+                        if let Ok(devices) = spotify.get_available_devices().await {
+                            if let Some(our_device) = devices.iter().find(|d| d.name == local_device_name) {
+                                info!(device_name = %local_device_name, device_id = %our_device.id, "Transferring playback to local device");
+                                // Transfer playback to make our device active (don't start playing yet)
+                                if let Err(e) = spotify.transfer_playback_to_device(&our_device.id, false).await {
+                                    warn!(error = %e, "Failed to transfer playback to local device, will try during play");
+                                }
+                            } else {
+                                warn!(device_name = %local_device_name, "Local device not found in available devices list");
+                                debug!(?devices, "Available devices");
+                            }
+                        }
+                    }
+
+                    info!("Local audio backend activated for playback");
                     true
                 }
                 Err(e) => {
+                    error!(error = %e, "Failed to activate local audio backend");
                     drop(backend_guard);
                     let model = self.model.lock().await;
                     model.set_error(format!("Failed to activate audio: {}", e)).await;
@@ -733,6 +758,7 @@ impl AppController {
                 }
             }
         } else {
+            warn!("Audio backend not ready after waiting");
             // Backend still not ready after waiting
             let model = self.model.lock().await;
             model.set_error("Audio backend not ready. Please try again.".to_string()).await;
@@ -1062,13 +1088,19 @@ impl AppController {
         match operation().await {
             Ok(()) => return Ok(()),
             Err(e) => {
+                debug!(error = %e, "Playback operation failed, checking if recovery is needed");
+
                 // Check if this is a device unavailable error and the local backend exists
                 let local_backend_exists = {
                     let backend_guard = self.audio_backend.lock().await;
                     backend_guard.is_some()
                 };
 
-                if Self::is_device_unavailable_error(&e) && local_backend_exists {
+                let is_device_error = Self::is_device_unavailable_error(&e);
+                debug!(is_device_error, local_backend_exists, "Recovery check");
+
+                if is_device_error && local_backend_exists {
+                    info!("Device unavailable error detected, attempting backend recovery");
                     // Try to restart the local backend
                     if let Some(event_channel) = self.try_restart_audio_backend().await {
                         // Start listening to events from the new backend
@@ -1078,7 +1110,17 @@ impl AppController {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                         // Retry the operation
-                        return operation().await;
+                        debug!("Retrying playback operation after backend recovery");
+                        match operation().await {
+                            Ok(()) => {
+                                info!("Playback operation succeeded after recovery");
+                                return Ok(());
+                            }
+                            Err(retry_err) => {
+                                error!(error = %retry_err, "Playback operation failed even after recovery");
+                                return Err(retry_err);
+                            }
+                        }
                     }
                 }
                 Err(e)

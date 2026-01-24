@@ -527,11 +527,29 @@ impl SpotifyClient {
 
     /// Get the device ID for the currently active device
     /// This respects device switching by using whatever device is currently active
+    /// Falls back to the local device if no active device is found
     async fn get_device_id(&self) -> Option<String> {
         if let Ok(devices) = self.client.device().await {
-            // Use the currently active device
-            devices.into_iter().find(|d| d.is_active).and_then(|d| d.id)
+            // First, try to find the active device
+            let active_device = devices.iter().find(|d| d.is_active);
+            if let Some(device) = active_device {
+                debug!(device_name = %device.name, device_id = ?device.id, "Found active device");
+                return device.id.clone();
+            }
+
+            // No active device - try to find our local device as fallback
+            if let Some(local_name) = &self.local_device_name {
+                let local_device = devices.iter().find(|d| &d.name == local_name);
+                if let Some(device) = local_device {
+                    debug!(device_name = %device.name, device_id = ?device.id, "No active device, using local device as fallback");
+                    return device.id.clone();
+                }
+            }
+
+            debug!(available_devices = devices.len(), "No active device found and local device not in list");
+            None
         } else {
+            debug!("Failed to get devices list");
             None
         }
     }
@@ -838,6 +856,7 @@ impl SpotifyClient {
     /// Play a specific track URI
     pub async fn play_track(&self, uri: &str) -> Result<()> {
         let device_id = self.get_device_id().await;
+        debug!(uri, device_id = ?device_id, "API: play_track");
 
         // Extract track ID from URI (format: spotify:track:ID)
         let track_id = uri.split(':').last().unwrap_or(uri);
