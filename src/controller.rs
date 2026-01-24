@@ -55,14 +55,14 @@ impl AppController {
 
         // Handle device picker modal first (highest priority)
         if model.is_device_picker_open().await {
-            match key.code {
+            return match key.code {
                 KeyCode::Up => {
                     model.device_picker_move_up().await;
-                    return Ok(());
+                    Ok(())
                 }
                 KeyCode::Down => {
                     model.device_picker_move_down().await;
-                    return Ok(());
+                    Ok(())
                 }
                 KeyCode::Enter => {
                     // Select the device
@@ -72,13 +72,13 @@ impl AppController {
                         drop(model);
                         self.select_device(&device, &local_device_name).await;
                     }
-                    return Ok(());
+                    Ok(())
                 }
                 KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
                     model.hide_device_picker().await;
-                    return Ok(());
+                    Ok(())
                 }
-                _ => return Ok(()),
+                _ => Ok(()),
             }
         }
 
@@ -669,6 +669,8 @@ impl AppController {
                 }
             }
         }
+
+        self.refresh_playback().await;
     }
 
     /// Ensure there's an active device available for playback
@@ -721,7 +723,7 @@ impl AppController {
                     
                     // Update device name
                     let model = self.model.lock().await;
-                    let local_device_name = crate::audio::AudioBackend::get_device_name().to_string();
+                    let local_device_name = AudioBackend::get_device_name().to_string();
                     model.update_device_name(local_device_name.clone()).await;
 
                     // Give it time to register with Spotify Connect
@@ -821,7 +823,7 @@ impl AppController {
                 drop(backend_guard);
                 self.try_start_event_listener().await;
                 let model = self.model.lock().await;
-                model.update_device_name(crate::audio::AudioBackend::get_device_name().to_string()).await;
+                model.update_device_name(AudioBackend::get_device_name().to_string()).await;
 
                 // Give it a moment to register with Spotify
                 drop(model);
@@ -1082,11 +1084,11 @@ impl AppController {
     async fn with_backend_recovery<F, Fut>(&self, operation: F) -> Result<()>
     where
         F: Fn() -> Fut + Clone,
-        Fut: std::future::Future<Output = Result<()>>,
+        Fut: Future<Output = Result<()>>,
     {
         // First attempt
         match operation().await {
-            Ok(()) => return Ok(()),
+            Ok(()) => Ok(()),
             Err(e) => {
                 debug!(error = %e, "Playback operation failed, checking if recovery is needed");
 
@@ -1111,14 +1113,14 @@ impl AppController {
 
                         // Retry the operation
                         debug!("Retrying playback operation after backend recovery");
-                        match operation().await {
+                        return match operation().await {
                             Ok(()) => {
                                 info!("Playback operation succeeded after recovery");
-                                return Ok(());
+                                Ok(())
                             }
                             Err(retry_err) => {
                                 error!(error = %retry_err, "Playback operation failed even after recovery");
-                                return Err(retry_err);
+                                Err(retry_err)
                             }
                         }
                     }
