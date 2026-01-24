@@ -44,6 +44,24 @@ async fn main() -> Result<()> {
     let local_device_name = AudioBackend::get_device_name().to_string();
     let spotify_client = SpotifyClient::new(rspotify_client, Some(local_device_name.clone()));
 
+    // Initialize liked songs cache from disk
+    let cache_loaded = spotify_client.init_liked_songs_cache().await.is_ok();
+
+    // If cache wasn't loaded from disk, refresh synchronously (first run)
+    // Otherwise refresh in background
+    if !cache_loaded || !std::path::Path::new(".cache/liked_songs.json").exists() {
+        println!("Loading liked songs...");
+        if let Err(e) = spotify_client.refresh_liked_songs_cache().await {
+            eprintln!("Warning: Could not load liked songs: {}", e);
+        }
+    } else {
+        // Refresh liked songs cache in background (async API call)
+        let spotify_for_cache = spotify_client.clone();
+        tokio::spawn(async move {
+            let _ = spotify_for_cache.refresh_liked_songs_cache().await;
+        });
+    }
+
     // Initialize model
     let mut app_model = AppModel::new();
     app_model.set_spotify_client(spotify_client.clone());

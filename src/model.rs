@@ -1,12 +1,105 @@
 use std::sync::Arc;
+use std::collections::HashSet;
 use anyhow::Result;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use rspotify::{
     model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, AlbumId, PlaylistId, ArtistId},
     prelude::*,
     AuthCodeSpotify,
 };
+
+const LIKED_SONGS_CACHE_FILE: &str = ".cache/liked_songs.json";
+
+/// Cache for liked song IDs to enable fast lookup without API calls
+#[derive(Clone)]
+pub struct LikedSongsCache {
+    /// Set of liked track IDs for O(1) lookup
+    liked_ids: Arc<RwLock<HashSet<String>>>,
+    /// Whether the cache has been loaded
+    loaded: Arc<RwLock<bool>>,
+}
+
+impl LikedSongsCache {
+    pub fn new() -> Self {
+        Self {
+            liked_ids: Arc::new(RwLock::new(HashSet::new())),
+            loaded: Arc::new(RwLock::new(false)),
+        }
+    }
+
+    /// Load the cache from disk
+    pub async fn load_from_disk(&self) -> Result<()> {
+        use std::fs;
+        use std::path::Path;
+
+        let path = Path::new(LIKED_SONGS_CACHE_FILE);
+        if path.exists() {
+            let content = fs::read_to_string(path)?;
+            let ids: Vec<String> = serde_json::from_str(&content)?;
+            let mut liked_ids = self.liked_ids.write().await;
+            *liked_ids = ids.into_iter().collect();
+            let mut loaded = self.loaded.write().await;
+            *loaded = true;
+        }
+        Ok(())
+    }
+
+    /// Save the cache to disk
+    pub async fn save_to_disk(&self) -> Result<()> {
+        use std::fs;
+        use std::path::Path;
+
+        // Ensure .cache directory exists
+        let cache_dir = Path::new(".cache");
+        if !cache_dir.exists() {
+            fs::create_dir_all(cache_dir)?;
+        }
+
+        let liked_ids = self.liked_ids.read().await;
+        let ids: Vec<&String> = liked_ids.iter().collect();
+        let content = serde_json::to_string(&ids)?;
+        fs::write(LIKED_SONGS_CACHE_FILE, content)?;
+        Ok(())
+    }
+
+    /// Update the cache with a new set of liked track IDs
+    pub async fn update(&self, track_ids: Vec<String>) {
+        let mut liked_ids = self.liked_ids.write().await;
+        *liked_ids = track_ids.into_iter().collect();
+        let mut loaded = self.loaded.write().await;
+        *loaded = true;
+    }
+
+    /// Check if a track is liked
+    pub async fn is_liked(&self, track_id: &str) -> bool {
+        let liked_ids = self.liked_ids.read().await;
+        liked_ids.contains(track_id)
+    }
+
+    /// Add a track to the liked cache
+    pub async fn add(&self, track_id: String) {
+        let mut liked_ids = self.liked_ids.write().await;
+        liked_ids.insert(track_id);
+    }
+
+    /// Remove a track from the liked cache
+    pub async fn remove(&self, track_id: &str) {
+        let mut liked_ids = self.liked_ids.write().await;
+        liked_ids.remove(track_id);
+    }
+
+    /// Check if the cache has been loaded
+    pub async fn is_loaded(&self) -> bool {
+        *self.loaded.read().await
+    }
+
+    /// Get the number of liked songs in the cache
+    pub async fn len(&self) -> usize {
+        self.liked_ids.read().await.len()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveSection {
@@ -349,6 +442,7 @@ pub struct ContentState {
 pub struct SpotifyClient {
     client: Arc<AuthCodeSpotify>,
     local_device_name: Option<String>,
+    liked_songs_cache: LikedSongsCache,
 }
 
 impl SpotifyClient {
@@ -356,6 +450,60 @@ impl SpotifyClient {
         Self {
             client: Arc::new(client),
             local_device_name,
+            liked_songs_cache: LikedSongsCache::new(),
+        }
+    }
+
+    /// Get a reference to the liked songs cache
+    pub fn liked_cache(&self) -> &LikedSongsCache {
+        &self.liked_songs_cache
+    }
+
+    /// Initialize the liked songs cache - load from disk and optionally refresh from API
+    pub async fn init_liked_songs_cache(&self) -> Result<()> {
+        // First try to load from disk
+        if let Err(_e) = self.liked_songs_cache.load_from_disk().await {
+            // Silently ignore - cache file may not exist yet
+        }
+        Ok(())
+    }
+
+    /// Refresh the liked songs cache from the API and save to disk
+    pub async fn refresh_liked_songs_cache(&self) -> Result<()> {
+        use futures::TryStreamExt;
+        use futures::StreamExt;
+        use rspotify::prelude::Id;
+
+        // Fetch all liked songs from API
+        let tracks_stream = self.client.current_user_saved_tracks(None);
+        let saved_tracks: Vec<_> = tracks_stream
+            .take(1000) // Reasonable limit
+            .try_collect()
+            .await?;
+
+        let track_ids: Vec<String> = saved_tracks
+            .into_iter()
+            .filter_map(|saved| saved.track.id.map(|id| id.id().to_string()))
+            .collect();
+
+        // Update cache
+        self.liked_songs_cache.update(track_ids).await;
+
+        // Save to disk
+        let _ = self.liked_songs_cache.save_to_disk().await;
+
+        Ok(())
+    }
+
+    /// Check if a track is liked (uses cache for fast lookup)
+    pub async fn is_track_liked(&self, track_id: &str) -> bool {
+        self.liked_songs_cache.is_liked(track_id).await
+    }
+
+    /// Mark tracks with their liked status using the cache
+    pub async fn mark_tracks_liked(&self, tracks: &mut [SearchTrack]) {
+        for track in tracks.iter_mut() {
+            track.liked = self.liked_songs_cache.is_liked(&track.id).await;
         }
     }
 
@@ -495,7 +643,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
-                    liked: false, // TODO: Check if track is liked
+                    liked: false, // Set by mark_tracks_liked() in controller
                 });
             }
         }
@@ -562,7 +710,7 @@ impl SpotifyClient {
                 artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                 album: album.name.clone(),
                 duration_ms: track.duration.num_milliseconds() as u32,
-                liked: false, // TODO: Check if track is liked
+                liked: false, // Set by mark_tracks_liked() in controller
             });
         }
 
@@ -595,7 +743,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name.clone(),
                     duration_ms: track.duration.num_milliseconds() as u32,
-                    liked: false, // TODO: Check if track is liked
+                    liked: false, // Set by mark_tracks_liked() in controller
                 });
             }
         }
@@ -633,7 +781,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
-                    liked: false, // TODO: Check if track is liked
+                    liked: false, // Set by mark_tracks_liked() in controller
                 }
             })
             .collect();
@@ -755,7 +903,7 @@ impl SpotifyClient {
         Ok(playlists)
     }
 
-    /// Get user's liked songs (saved tracks)
+    /// Get user's liked songs (saved tracks) and refresh the cache
     pub async fn get_liked_songs(&self, limit: u32) -> Result<Vec<SearchTrack>> {
         use futures::TryStreamExt;
         use futures::StreamExt;
@@ -783,6 +931,16 @@ impl SpotifyClient {
                 }
             })
             .collect();
+
+        // Update the cache with all liked song IDs
+        let track_ids: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
+        self.liked_songs_cache.update(track_ids).await;
+
+        // Save cache to disk (async, don't block on errors)
+        let cache = self.liked_songs_cache.clone();
+        tokio::spawn(async move {
+            let _ = cache.save_to_disk().await;
+        });
 
         Ok(tracks)
     }
@@ -849,7 +1007,7 @@ impl SpotifyClient {
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
-                    liked: false, // TODO: Check if track is liked
+                    liked: false, // Set by mark_tracks_liked() in controller
                 }
             })
             .collect();

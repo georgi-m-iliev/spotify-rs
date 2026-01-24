@@ -250,7 +250,9 @@ impl AppController {
 
         if let Some(spotify) = &model.spotify {
             match spotify.search(query, SEARCH_LIMIT as u32).await {
-                Ok(results) => {
+                Ok(mut results) => {
+                    // Mark tracks with liked status from cache
+                    spotify.mark_tracks_liked(&mut results.tracks).await;
                     model.set_search_results(results).await;
                     // Switch to MainContent section to show results
                     let mut ui_state = model.ui_state.lock().await;
@@ -352,7 +354,9 @@ impl AppController {
                 model.set_content_loading(true).await;
                 if let Some(spotify) = &model.spotify {
                     match spotify.get_album(&id).await {
-                        Ok(detail) => {
+                        Ok(mut detail) => {
+                            // Mark tracks with liked status from cache
+                            spotify.mark_tracks_liked(&mut detail.tracks).await;
                             model.set_album_detail(detail).await;
                         }
                         Err(e) => {
@@ -369,7 +373,9 @@ impl AppController {
                 model.set_content_loading(true).await;
                 if let Some(spotify) = &model.spotify {
                     match spotify.get_artist(&id).await {
-                        Ok(detail) => {
+                        Ok(mut detail) => {
+                            // Mark tracks with liked status from cache
+                            spotify.mark_tracks_liked(&mut detail.top_tracks).await;
                             model.set_artist_detail(detail).await;
                         }
                         Err(e) => {
@@ -386,7 +392,9 @@ impl AppController {
                 model.set_content_loading(true).await;
                 if let Some(spotify) = &model.spotify {
                     match spotify.get_playlist(&id).await {
-                        Ok(detail) => {
+                        Ok(mut detail) => {
+                            // Mark tracks with liked status from cache
+                            spotify.mark_tracks_liked(&mut detail.tracks).await;
                             model.set_playlist_detail(detail).await;
                         }
                         Err(e) => {
@@ -776,7 +784,9 @@ impl AppController {
 
         if let Some(spotify) = &model.spotify {
             match spotify.get_playlist(playlist_id).await {
-                Ok(detail) => {
+                Ok(mut detail) => {
+                    // Mark tracks with liked status from cache
+                    spotify.mark_tracks_liked(&mut detail.tracks).await;
                     model.set_playlist_detail(detail).await;
                     // Switch to MainContent section to show playlist details
                     let mut ui_state = model.ui_state.lock().await;
@@ -802,7 +812,9 @@ impl AppController {
                 0 => {
                     // Recently played
                     match spotify.get_recently_played(50).await {
-                        Ok(tracks) => {
+                        Ok(mut tracks) => {
+                            // Mark tracks with liked status from cache
+                            spotify.mark_tracks_liked(&mut tracks).await;
                             model.set_recently_played(tracks).await;
                             Ok(())
                         }
@@ -810,7 +822,7 @@ impl AppController {
                     }
                 }
                 1 => {
-                    // Liked songs
+                    // Liked songs (already marked as liked in get_liked_songs)
                     match spotify.get_liked_songs(100).await {
                         Ok(tracks) => {
                             model.set_liked_songs(tracks).await;
