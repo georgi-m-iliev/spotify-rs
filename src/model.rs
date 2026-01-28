@@ -326,6 +326,12 @@ pub struct PlaylistDetail {
     pub owner: String,
     pub description: Option<String>,
     pub tracks: Vec<SearchTrack>,
+    /// Total number of tracks in the playlist (may be more than loaded)
+    pub total_tracks: u32,
+    /// Whether there are more tracks to load
+    pub has_more: bool,
+    /// Whether more tracks are currently being loaded
+    pub loading_more: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -766,17 +772,36 @@ impl SpotifyClient {
         })
     }
 
-    /// Get playlist details with tracks
+    /// Number of tracks to load per page
+    pub const PLAYLIST_PAGE_SIZE: usize = 100;
+
+    /// Get playlist details with first batch of tracks (paginated)
     pub async fn get_playlist(&self, playlist_id: &str) -> Result<PlaylistDetail> {
+        self.get_playlist_with_offset(playlist_id, 0).await
+    }
+
+    /// Get playlist details with tracks starting from a specific offset
+    pub async fn get_playlist_with_offset(&self, playlist_id: &str, offset: usize) -> Result<PlaylistDetail> {
+        use futures::TryStreamExt;
+        use futures::StreamExt;
         use rspotify::prelude::Id;
 
         let id = PlaylistId::from_id(playlist_id)?;
+
+        // First get playlist metadata
         let playlist = self.client.playlist(id.clone(), None, None).await?;
+        let total_tracks = playlist.tracks.total;
+
+        // Fetch tracks with pagination using playlist_items stream
+        let items_stream = self.client.playlist_items(id.clone(), None, None);
+        let items: Vec<_> = items_stream
+            .skip(offset)
+            .take(Self::PLAYLIST_PAGE_SIZE)
+            .try_collect()
+            .await?;
 
         let mut tracks = Vec::new();
-
-        // Playlist tracks are included in the full playlist response
-        for item in playlist.tracks.items.iter() {
+        for item in items.iter() {
             if let Some(PlayableItem::Track(track)) = &item.track {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                 tracks.push(SearchTrack {
@@ -791,6 +816,9 @@ impl SpotifyClient {
             }
         }
 
+        let loaded_count = offset + tracks.len();
+        let has_more = loaded_count < total_tracks as usize;
+
         Ok(PlaylistDetail {
             id: playlist_id.to_string(),
             uri: format!("spotify:playlist:{}", playlist_id),
@@ -798,7 +826,53 @@ impl SpotifyClient {
             owner: playlist.owner.display_name.clone().unwrap_or_else(|| playlist.owner.id.to_string()),
             description: playlist.description.clone(),
             tracks,
+            total_tracks,
+            has_more,
+            loading_more: false,
         })
+    }
+
+    /// Load more tracks for a playlist (for pagination)
+    pub async fn get_more_playlist_tracks(&self, playlist_id: &str, offset: usize) -> Result<(Vec<SearchTrack>, u32, bool)> {
+        use futures::TryStreamExt;
+        use futures::StreamExt;
+        use rspotify::prelude::Id;
+
+        let id = PlaylistId::from_id(playlist_id)?;
+
+        // Get total count from playlist metadata
+        let playlist = self.client.playlist(id.clone(), None, None).await?;
+        let total_tracks = playlist.tracks.total;
+
+        // Fetch next batch of tracks using stream
+        let items_stream = self.client.playlist_items(id.clone(), None, None);
+        let items: Vec<_> = items_stream
+            .skip(offset)
+            .take(Self::PLAYLIST_PAGE_SIZE)
+            .try_collect()
+            .await?;
+
+        let mut tracks = Vec::new();
+        for item in items.iter() {
+            if let Some(PlayableItem::Track(track)) = &item.track {
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                tracks.push(SearchTrack {
+                    uri: format!("spotify:track:{}", track_id),
+                    id: track_id,
+                    name: track.name.clone(),
+                    artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: track.album.name.clone(),
+                    duration_ms: track.duration.num_milliseconds() as u32,
+                    liked: false, // Set by mark_tracks_liked() in controller
+                });
+            }
+        }
+
+        // Check if there are more tracks to load
+        let loaded_count = offset + tracks.len();
+        let has_more = loaded_count < total_tracks as usize;
+
+        Ok((tracks, total_tracks, has_more))
     }
 
     /// Get artist details with top tracks and albums
@@ -1858,6 +1932,45 @@ impl AppModel {
                 })
             }
             ContentView::Empty => None,
+        }
+    }
+
+    /// Threshold for triggering loading more tracks (load when within this many tracks of the end)
+    const PAGINATION_THRESHOLD: usize = 10;
+
+    /// Check if we should load more playlist tracks (returns playlist_id and current offset if needed)
+    pub async fn should_load_more_playlist_tracks(&self) -> Option<(String, usize)> {
+        let state = self.content_state.lock().await;
+        if let ContentView::PlaylistDetail { detail, selected_index } = &state.view {
+            // Don't load if already loading or no more tracks
+            if detail.loading_more || !detail.has_more {
+                return None;
+            }
+
+            // Check if we're within threshold of the end
+            let loaded_count = detail.tracks.len();
+            if *selected_index + Self::PAGINATION_THRESHOLD >= loaded_count {
+                return Some((detail.id.clone(), loaded_count));
+            }
+        }
+        None
+    }
+
+    /// Set the loading_more flag for the current playlist
+    pub async fn set_playlist_loading_more(&self, loading: bool) {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::PlaylistDetail { detail, .. } = &mut state.view {
+            detail.loading_more = loading;
+        }
+    }
+
+    /// Append more tracks to the current playlist view
+    pub async fn append_playlist_tracks(&self, mut new_tracks: Vec<SearchTrack>, has_more: bool) {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::PlaylistDetail { detail, .. } = &mut state.view {
+            detail.tracks.append(&mut new_tracks);
+            detail.has_more = has_more;
+            detail.loading_more = false;
         }
     }
 }

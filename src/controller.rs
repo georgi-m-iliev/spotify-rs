@@ -134,6 +134,13 @@ impl AppController {
                 }
                 KeyCode::Down => {
                     model.content_move_down().await;
+                    // Check if we need to load more playlist tracks (spawn in background)
+                    if let Some((playlist_id, offset)) = model.should_load_more_playlist_tracks().await {
+                        let controller = self.clone();
+                        tokio::spawn(async move {
+                            controller.load_more_playlist_tracks(&playlist_id, offset).await;
+                        });
+                    }
                     return Ok(());
                 }
                 KeyCode::Left => {
@@ -891,6 +898,43 @@ impl AppController {
                 }
                 Err(e) => {
                     model.set_content_loading(false).await;
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Load more tracks for a playlist (pagination)
+    async fn load_more_playlist_tracks(&self, playlist_id: &str, offset: usize) {
+        debug!(playlist_id, offset, "Loading more playlist tracks");
+
+        let model = self.model.lock().await;
+        model.set_playlist_loading_more(true).await;
+
+        if let Some(spotify) = &model.spotify {
+            let spotify_clone = spotify.clone();
+            let playlist_id = playlist_id.to_string();
+            drop(model);
+
+            match spotify_clone.get_more_playlist_tracks(&playlist_id, offset).await {
+                Ok((mut tracks, _total_tracks, has_more)) => {
+                    info!(
+                        playlist_id,
+                        loaded = tracks.len(),
+                        has_more,
+                        "Loaded more playlist tracks"
+                    );
+                    // Mark tracks with liked status from cache
+                    spotify_clone.mark_tracks_liked(&mut tracks).await;
+
+                    let model = self.model.lock().await;
+                    model.append_playlist_tracks(tracks, has_more).await;
+                }
+                Err(e) => {
+                    error!(playlist_id, error = %e, "Failed to load more playlist tracks");
+                    let model = self.model.lock().await;
+                    model.set_playlist_loading_more(false).await;
                     let error_msg = Self::format_error(&e);
                     model.set_error(error_msg).await;
                 }

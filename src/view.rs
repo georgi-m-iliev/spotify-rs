@@ -655,12 +655,14 @@ impl AppView {
             ])
             .split(area);
 
-        // Header
+        // Header - show total track count and loading indicator if loading more
+        let loading_indicator = if detail.loading_more { " (loading...)" } else { "" };
         let header_text = format!(
-            " 📻 {} by {}\n {} tracks | Enter: Play from selected | Backspace: Go back",
+            " 📻 {} by {}\n {} tracks{} | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.owner,
-            detail.tracks.len()
+            detail.total_tracks,
+            loading_indicator
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
@@ -724,6 +726,19 @@ impl AppView {
             .collect();
 
         track_items.extend(tracks);
+
+        // Add loading indicator at the bottom if more tracks are available or loading
+        if detail.has_more || detail.loading_more {
+            let loading_text = if detail.loading_more {
+                "⏳ Loading more tracks..."
+            } else {
+                "↓ Scroll down for more tracks..."
+            };
+            track_items.push(
+                ListItem::new(format!("       {}", loading_text))
+                    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC))
+            );
+        }
 
         let tracks_block = Block::default()
             .borders(Borders::ALL)
