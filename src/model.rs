@@ -1257,7 +1257,7 @@ impl Default for PlaybackSettings {
             device_name: "spotify-rs".to_string(),
             shuffle: false,
             repeat: RepeatState::Off,
-            volume: 70,
+            volume: crate::audio::DEFAULT_VOLUME_PERCENT,
         }
     }
 }

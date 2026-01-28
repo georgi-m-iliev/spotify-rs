@@ -14,6 +14,14 @@ use tracing::{debug, info};
 
 const DEVICE_NAME: &str = "Spotify-RS";
 
+/// Default volume as a percentage (0-100)
+pub const DEFAULT_VOLUME_PERCENT: u8 = 70;
+
+/// Convert percentage (0-100) to librespot volume (0-65535)
+pub fn percent_to_librespot_volume(percent: u8) -> u16 {
+    ((percent as f32 / 100.0) * 65535.0) as u16
+}
+
 pub struct AudioPlayer {
     pub player: Arc<Player>,
     #[allow(dead_code)]
@@ -53,8 +61,12 @@ impl AudioPlayer {
             ..Default::default()
         };
         let audio_format = AudioFormat::default();
+
+        // Initial volume must match the default in model::PlaybackSettings
+        let initial_volume = percent_to_librespot_volume(DEFAULT_VOLUME_PERCENT);
         let connect_config = ConnectConfig {
             name: DEVICE_NAME.to_string(),
+            initial_volume,
             ..Default::default()
         };
         let mixer_config = MixerConfig::default();
