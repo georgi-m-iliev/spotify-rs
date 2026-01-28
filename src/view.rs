@@ -425,9 +425,9 @@ impl AppView {
                 // Create header as first item
                 let mut items = vec![
                     ListItem::new(format!(
-                        "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
-                        "#", " ", "Title", "Artist", "Duration",
-                        num_width = num_width,
+                        " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                        "#", "  ", "Title", "Artist", "Duration",
+                        num_width = num_width - 1,
                         title_width = title_width,
                         artist_width = artist_width
                     ))
@@ -593,12 +593,12 @@ impl AppView {
         let title_width = (remaining_width * 55) / 100;
         let artist_width = remaining_width.saturating_sub(title_width);
 
-        // Create header as first item
+        // Create header as first item (space prefix to align with playing indicator)
         let mut track_items: Vec<ListItem> = vec![
             ListItem::new(format!(
-                "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
-                "#", " ", "Title", "Artist", "Duration",
-                num_width = num_width,
+                " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", "  ", "Title", "Artist", "Duration",
+                num_width = num_width - 1,
                 title_width = title_width,
                 artist_width = artist_width
             ))
@@ -700,12 +700,12 @@ impl AppView {
         let title_width = (remaining_width * 55) / 100;
         let artist_width = remaining_width.saturating_sub(title_width);
 
-        // Create header as first item
+        // Create header as first item (space prefix to align with playing indicator)
         let mut track_items: Vec<ListItem> = vec![
             ListItem::new(format!(
-                "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
-                "#", " ", "Title", "Artist", "Duration",
-                num_width = num_width,
+                " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", "  ", "Title", "Artist", "Duration",
+                num_width = num_width - 1,
                 title_width = title_width,
                 artist_width = artist_width
             ))
@@ -830,12 +830,12 @@ impl AppView {
         let fixed_track_width = num_width + 3 + liked_width + 3 + 3 + duration_width;
         let title_width_artist = track_content_width.saturating_sub(fixed_track_width);
 
-        // Create header as first item
+        // Create header as first item (space prefix to align with playing indicator)
         let mut track_items: Vec<ListItem> = vec![
             ListItem::new(format!(
-                "{:<num_width$}   {}   {:<title_width_artist$}   {}",
-                "#", " ", "Title", "Duration",
-                num_width = num_width,
+                " {:<num_width$}   {}   {:<title_width_artist$}   {}",
+                "#", "  ", "Title", "Duration",
+                num_width = num_width - 1,
                 title_width_artist = title_width_artist
             ))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -897,7 +897,7 @@ impl AppView {
             .map(|(i, album)| {
                 let style = if i == album_index && section == ArtistDetailSection::Albums && is_focused {
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                } else if i == album_index && section == ArtistDetailSection::Albums {
+                } else if i == album_index {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -1140,12 +1140,12 @@ impl AppView {
         let title_width = (remaining_width * 55) / 100; // 55% for title
         let artist_width = remaining_width.saturating_sub(title_width); // Rest for artist
 
-        // Create header as first item
+        // Create header as first item (space prefix to align with playing indicator)
         let mut list_items: Vec<ListItem> = vec![
             ListItem::new(format!(
-                "{:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
-                "#", " ", "Title", "Artist", "Duration",
-                num_width = num_width,
+                " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", "  ", "Title", "Artist", "Duration",
+                num_width = num_width - 1,
                 title_width = title_width,
                 artist_width = artist_width
             ))
