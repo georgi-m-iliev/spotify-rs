@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace};
 use rspotify::{
-    model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, AlbumId, PlaylistId, ArtistId},
+    model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, AlbumId, PlaylistId, ArtistId, TrackId},
     prelude::*,
     AuthCodeSpotify,
 };
@@ -515,6 +515,55 @@ impl SpotifyClient {
     pub async fn mark_tracks_liked(&self, tracks: &mut [SearchTrack]) {
         for track in tracks.iter_mut() {
             track.liked = self.liked_songs_cache.is_liked(&track.id).await;
+        }
+    }
+
+    /// Add a track to the user's liked songs
+    pub async fn add_to_liked_songs(&self, track_id: &str) -> Result<()> {
+        if track_id.is_empty() {
+            return Err(anyhow::anyhow!("Track ID is empty"));
+        }
+
+        debug!(track_id, "Adding track to liked songs");
+        let id = TrackId::from_id(track_id)?;
+        self.client.current_user_saved_tracks_add([id]).await?;
+
+        // Update the cache
+        self.liked_songs_cache.add(track_id.to_string()).await;
+        let _ = self.liked_songs_cache.save_to_disk().await;
+
+        info!(track_id, "Added track to liked songs");
+        Ok(())
+    }
+
+    /// Remove a track from the user's liked songs
+    pub async fn remove_from_liked_songs(&self, track_id: &str) -> Result<()> {
+        if track_id.is_empty() {
+            return Err(anyhow::anyhow!("Track ID is empty"));
+        }
+
+        debug!(track_id, "Removing track from liked songs");
+        let id = TrackId::from_id(track_id)?;
+        self.client.current_user_saved_tracks_delete([id]).await?;
+
+        // Update the cache
+        self.liked_songs_cache.remove(track_id).await;
+        let _ = self.liked_songs_cache.save_to_disk().await;
+
+        info!(track_id, "Removed track from liked songs");
+        Ok(())
+    }
+
+    /// Toggle a track's liked status - returns the new liked status
+    pub async fn toggle_liked_song(&self, track_id: &str) -> Result<bool> {
+        let is_liked = self.liked_songs_cache.is_liked(track_id).await;
+
+        if is_liked {
+            self.remove_from_liked_songs(track_id).await?;
+            Ok(false)
+        } else {
+            self.add_to_liked_songs(track_id).await?;
+            Ok(true)
         }
     }
 
@@ -1982,6 +2031,85 @@ impl AppModel {
             detail.tracks.append(&mut new_tracks);
             detail.has_more = has_more;
             detail.loading_more = false;
+        }
+    }
+
+    /// Get the currently selected track's ID and liked status (if a track is selected)
+    /// Returns (track_id, is_liked) or None if no track is selected
+    pub async fn get_selected_track_for_like(&self) -> Option<(String, bool)> {
+        let state = self.content_state.lock().await;
+        let result = match &state.view {
+            ContentView::SearchResults { results, section, track_index, .. } => {
+                if *section == SearchResultSection::Tracks {
+                    results.tracks.get(*track_index).map(|t| (t.id.clone(), t.liked))
+                } else {
+                    None
+                }
+            }
+            ContentView::AlbumDetail { detail, selected_index } => {
+                detail.tracks.get(*selected_index).map(|t| (t.id.clone(), t.liked))
+            }
+            ContentView::PlaylistDetail { detail, selected_index } => {
+                detail.tracks.get(*selected_index).map(|t| (t.id.clone(), t.liked))
+            }
+            ContentView::ArtistDetail { detail, section, track_index, .. } => {
+                if *section == ArtistDetailSection::TopTracks {
+                    detail.top_tracks.get(*track_index).map(|t| (t.id.clone(), t.liked))
+                } else {
+                    None
+                }
+            }
+            ContentView::LikedSongs { tracks, selected_index } => {
+                tracks.get(*selected_index).map(|t| (t.id.clone(), t.liked))
+            }
+            ContentView::RecentlyPlayed { tracks, selected_index } => {
+                tracks.get(*selected_index).map(|t| (t.id.clone(), t.liked))
+            }
+            _ => None,
+        };
+
+        if let Some((ref id, liked)) = result {
+            debug!(track_id = %id, liked, "Selected track for like toggle");
+        }
+
+        result
+    }
+
+    /// Update the liked status of a track in the current view
+    pub async fn update_track_liked_status(&self, track_id: &str, liked: bool) {
+        let mut state = self.content_state.lock().await;
+        match &mut state.view {
+            ContentView::SearchResults { results, .. } => {
+                if let Some(track) = results.tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+            }
+            ContentView::AlbumDetail { detail, .. } => {
+                if let Some(track) = detail.tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+            }
+            ContentView::PlaylistDetail { detail, .. } => {
+                if let Some(track) = detail.tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+            }
+            ContentView::ArtistDetail { detail, .. } => {
+                if let Some(track) = detail.top_tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+            }
+            ContentView::LikedSongs { tracks, .. } => {
+                if let Some(track) = tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+            }
+            ContentView::RecentlyPlayed { tracks, .. } => {
+                if let Some(track) = tracks.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+            }
+            _ => {}
         }
     }
 }

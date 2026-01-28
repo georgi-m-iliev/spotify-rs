@@ -165,6 +165,14 @@ impl AppController {
                     model.navigate_back().await;
                     return Ok(());
                 }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    // Toggle liked status for selected track
+                    if let Some((track_id, _is_liked)) = model.get_selected_track_for_like().await {
+                        drop(model);
+                        self.toggle_liked_track(&track_id).await;
+                    }
+                    return Ok(());
+                }
                 _ => {}
             }
         }
@@ -585,6 +593,37 @@ impl AppController {
             } else {
                 // Update local state
                 model.set_volume(new_volume).await;
+            }
+        }
+    }
+
+    /// Toggle the liked status of a track
+    async fn toggle_liked_track(&self, track_id: &str) {
+        // Validate track ID before making API call
+        if track_id.is_empty() {
+            tracing::warn!("Cannot toggle liked status: track ID is empty");
+            let model = self.model.lock().await;
+            model.set_error("Cannot like/unlike: track has no ID".to_string()).await;
+            return;
+        }
+
+        tracing::debug!(track_id, "Toggling liked status for track");
+
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.toggle_liked_song(track_id).await {
+                Ok(new_liked_status) => {
+                    // Update the UI to reflect the new liked status
+                    model.update_track_liked_status(track_id, new_liked_status).await;
+
+                    let status = if new_liked_status { "added to" } else { "removed from" };
+                    tracing::info!(track_id, status, "Track liked status toggled");
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
             }
         }
     }
