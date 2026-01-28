@@ -1229,11 +1229,15 @@ impl AppController {
                             }
                         };
 
+                        // Build URI from track_id - to_uri() returns the full "spotify:track:xxx" format
+                        let uri = audio_item.track_id.to_uri().unwrap_or_default();
+
                         info!(
                             track = %audio_item.name,
                             artist = %artist,
                             album = %album,
                             duration_ms = audio_item.duration_ms,
+                            uri = %uri,
                             "PlayerEvent::TrackChanged"
                         );
 
@@ -1242,6 +1246,7 @@ impl AppController {
                             artist,
                             album,
                             duration_ms: audio_item.duration_ms,
+                            uri,
                         };
                         model_guard.update_track_info(track).await;
                     }

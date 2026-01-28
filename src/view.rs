@@ -28,7 +28,13 @@ impl AppView {
         Self::render_top_bar(frame, chunks[0], ui_state, &playback.settings.device_name);
 
         // Middle: Sidebar (Library + Playlists) and Main Content
-        Self::render_main_area(frame, chunks[1], ui_state, content_state);
+        // Pass the currently playing track URI for highlighting
+        let current_playing_uri = if !playback.track.uri.is_empty() {
+            Some(playback.track.uri.as_str())
+        } else {
+            None
+        };
+        Self::render_main_area(frame, chunks[1], ui_state, content_state, current_playing_uri);
 
         // Bottom: Progress bar with track info and controls
         Self::render_progress_bar(frame, chunks[2], playback);
@@ -106,7 +112,7 @@ impl AppView {
         frame.render_widget(device, chunks[1]);
     }
 
-    fn render_main_area(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState) {
+    fn render_main_area(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState, current_playing_uri: Option<&str>) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -119,7 +125,7 @@ impl AppView {
         Self::render_sidebar(frame, chunks[0], ui_state);
 
         // Main content area
-        Self::render_main_content(frame, chunks[1], ui_state, content_state);
+        Self::render_main_content(frame, chunks[1], ui_state, content_state, current_playing_uri);
     }
 
     fn render_sidebar(frame: &mut Frame, area: Rect, ui_state: &UiState) {
@@ -212,7 +218,7 @@ impl AppView {
         frame.render_stateful_widget(playlists, chunks[1], &mut list_state);
     }
 
-    fn render_main_content(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState) {
+    fn render_main_content(frame: &mut Frame, area: Rect, ui_state: &UiState, content_state: &ContentState, current_playing_uri: Option<&str>) {
         let is_focused = ui_state.active_section == ActiveSection::MainContent;
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -263,13 +269,14 @@ impl AppView {
                     *artist_index,
                     *playlist_index,
                     is_focused,
+                    current_playing_uri,
                 );
             }
             ContentView::AlbumDetail { detail, selected_index } => {
-                Self::render_album_detail(frame, area, detail, *selected_index, is_focused);
+                Self::render_album_detail(frame, area, detail, *selected_index, is_focused, current_playing_uri);
             }
             ContentView::PlaylistDetail { detail, selected_index } => {
-                Self::render_playlist_detail(frame, area, detail, *selected_index, is_focused);
+                Self::render_playlist_detail(frame, area, detail, *selected_index, is_focused, current_playing_uri);
             }
             ContentView::ArtistDetail {
                 detail,
@@ -285,6 +292,7 @@ impl AppView {
                     *track_index,
                     *album_index,
                     is_focused,
+                    current_playing_uri,
                 );
             }
             ContentView::LikedSongs { tracks, selected_index } => {
@@ -295,6 +303,7 @@ impl AppView {
                     tracks,
                     *selected_index,
                     is_focused,
+                    current_playing_uri,
                 );
             }
             ContentView::RecentlyPlayed { tracks, selected_index } => {
@@ -305,6 +314,7 @@ impl AppView {
                     tracks,
                     *selected_index,
                     is_focused,
+                    current_playing_uri,
                 );
             }
             ContentView::SavedAlbums { albums, selected_index } => {
@@ -340,6 +350,7 @@ impl AppView {
         artist_index: usize,
         playlist_index: usize,
         is_focused: bool,
+        current_playing_uri: Option<&str>,
     ) {
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -426,8 +437,11 @@ impl AppView {
                 // Add track items
                 let track_items: Vec<ListItem> = results.tracks.iter().enumerate().map(|(i, track)| {
                     let duration = Self::format_duration(track.duration_ms);
+                    let is_playing = current_playing_uri.map_or(false, |uri| uri == track.uri);
                     let style = if i == track_index && is_focused {
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if is_playing {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                     } else if i == track_index {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
@@ -435,7 +449,8 @@ impl AppView {
                     };
 
                     let liked_indicator = if track.liked { "💚" } else { "  " };
-                    let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+                    let playing_indicator = if is_playing { "▶" } else { " " };
+                    let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
 
                     let title_str = if track.name.len() > title_width {
                         format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
@@ -539,6 +554,7 @@ impl AppView {
         detail: &crate::model::AlbumDetail,
         selected_index: usize,
         is_focused: bool,
+        current_playing_uri: Option<&str>,
     ) {
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -596,8 +612,11 @@ impl AppView {
             .enumerate()
             .map(|(i, track)| {
                 let duration = Self::format_duration(track.duration_ms);
+                let is_playing = current_playing_uri.map_or(false, |uri| uri == track.uri);
                 let style = if i == selected_index && is_focused {
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if is_playing {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 } else if i == selected_index {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
@@ -605,7 +624,8 @@ impl AppView {
                 };
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
-                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+                let playing_indicator = if is_playing { "▶" } else { " " };
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
 
                 let title_str = if track.name.len() > title_width {
                     format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
@@ -640,6 +660,7 @@ impl AppView {
         detail: &crate::model::PlaylistDetail,
         selected_index: usize,
         is_focused: bool,
+        current_playing_uri: Option<&str>,
     ) {
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -698,8 +719,11 @@ impl AppView {
             .enumerate()
             .map(|(i, track)| {
                 let duration = Self::format_duration(track.duration_ms);
+                let is_playing = current_playing_uri.map_or(false, |uri| uri == track.uri);
                 let style = if i == selected_index && is_focused {
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if is_playing {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 } else if i == selected_index {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
@@ -707,7 +731,8 @@ impl AppView {
                 };
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
-                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+                let playing_indicator = if is_playing { "▶" } else { " " };
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
 
                 let title_str = if track.name.len() > title_width {
                     format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
@@ -757,6 +782,7 @@ impl AppView {
         track_index: usize,
         album_index: usize,
         is_focused: bool,
+        current_playing_uri: Option<&str>,
     ) {
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -822,8 +848,11 @@ impl AppView {
             .enumerate()
             .map(|(i, track)| {
                 let duration = Self::format_duration(track.duration_ms);
+                let is_playing = current_playing_uri.map_or(false, |uri| uri == track.uri);
                 let style = if i == track_index && section == ArtistDetailSection::TopTracks && is_focused {
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if is_playing {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 } else if i == track_index && section == ArtistDetailSection::TopTracks {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
@@ -831,7 +860,8 @@ impl AppView {
                 };
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
-                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+                let playing_indicator = if is_playing { "▶" } else { " " };
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
 
                 let title_str = if track.name.len() > title_width_artist {
                     format!("{:.width$}...", track.name, width = title_width_artist.saturating_sub(3))
@@ -1088,6 +1118,7 @@ impl AppView {
         tracks: &[crate::model::SearchTrack],
         selected_index: usize,
         is_focused: bool,
+        current_playing_uri: Option<&str>,
     ) {
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -1127,8 +1158,11 @@ impl AppView {
             .enumerate()
             .map(|(i, track)| {
                 let duration = Self::format_duration(track.duration_ms);
+                let is_playing = current_playing_uri.map_or(false, |uri| uri == track.uri);
                 let style = if i == selected_index && is_focused {
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if is_playing {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 } else if i == selected_index {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
@@ -1136,7 +1170,8 @@ impl AppView {
                 };
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
-                let track_num = format!("{:<num_width$}", i + 1, num_width = num_width);
+                let playing_indicator = if is_playing { "▶" } else { " " };
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
 
                 let title_str = if track.name.len() > title_width {
                     format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))

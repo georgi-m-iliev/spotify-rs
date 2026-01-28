@@ -1140,6 +1140,7 @@ pub struct TrackMetadata {
     pub artist: String,
     pub album: String,
     pub duration_ms: u32,
+    pub uri: String,
 }
 
 impl Default for TrackMetadata {
@@ -1149,6 +1150,7 @@ impl Default for TrackMetadata {
             artist: String::new(),
             album: String::new(),
             duration_ms: 0,
+            uri: String::new(),
         }
     }
 }
@@ -1164,19 +1166,28 @@ impl TrackMetadata {
                         .map(|a| a.name.clone())
                         .unwrap_or_default();
 
+                    let uri = track.id.as_ref()
+                        .map(|id| format!("spotify:track:{}", id.id()))
+                        .unwrap_or_default();
+
                     Self {
                         name: track.name.clone(),
                         artist,
                         album: track.album.name.clone(),
                         duration_ms: track.duration.num_milliseconds() as u32,
+                        uri,
                     }
                 }
-                PlayableItem::Episode(episode) => Self {
-                    name: episode.name.clone(),
-                    artist: episode.show.name.clone(),
-                    album: "Podcast".to_string(),
-                    duration_ms: episode.duration.num_milliseconds() as u32,
-                },
+                PlayableItem::Episode(episode) => {
+                    let uri = format!("spotify:episode:{}", episode.id.id());
+                    Self {
+                        name: episode.name.clone(),
+                        artist: episode.show.name.clone(),
+                        album: "Podcast".to_string(),
+                        duration_ms: episode.duration.num_milliseconds() as u32,
+                        uri,
+                    }
+                }
                 PlayableItem::Unknown(_) => Self::default(),
             }
         } else {
