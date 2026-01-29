@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tracing::{debug, info, trace};
+use tracing;
 use rspotify::{
     model::{CurrentPlaybackContext, PlayableItem, SearchType, Market, AlbumId, PlaylistId, ArtistId, TrackId},
     prelude::*,
@@ -91,15 +91,6 @@ impl LikedSongsCache {
         liked_ids.remove(track_id);
     }
 
-    /// Check if the cache has been loaded
-    pub async fn is_loaded(&self) -> bool {
-        *self.loaded.read().await
-    }
-
-    /// Get the number of liked songs in the cache
-    pub async fn len(&self) -> usize {
-        self.liked_ids.read().await.len()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,13 +131,11 @@ pub struct DeviceInfo {
     pub id: String,
     pub name: String,
     pub is_active: bool,
-    pub volume_percent: Option<u8>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PlaylistItem {
     pub id: String,
-    pub uri: String,
     pub name: String,
 }
 
@@ -214,7 +203,6 @@ pub struct SearchAlbum {
     pub name: String,
     pub artist: String,
     pub year: String,
-    pub total_tracks: u32,
 }
 
 /// An artist from search results
@@ -251,7 +239,7 @@ impl SearchResults {
 
         // Score each category based on how well the top result matches the query
         // Higher score = better match
-        // Artists have highest priority for exact matches (e.g., searching "Coldplay")
+        // Artists have higher priority for exact matches (e.g., searching "Coldplay")
         let artist_score = self.artists.first().map(|a| {
             let name_lower = a.name.to_lowercase();
             if name_lower == query_lower { 100 }
@@ -279,7 +267,7 @@ impl SearchResults {
             else { 0 }
         }).unwrap_or(0);
 
-        // Playlists have lowest priority
+        // Playlists have lower priority
         let playlist_score = self.playlists.first().map(|p| {
             let name_lower = p.name.to_lowercase();
             if name_lower == query_lower { 80 }
@@ -324,9 +312,8 @@ pub struct PlaylistDetail {
     pub uri: String,
     pub name: String,
     pub owner: String,
-    pub description: Option<String>,
     pub tracks: Vec<SearchTrack>,
-    /// Total number of tracks in the playlist (may be more than loaded)
+    /// Total number of tracks in the playlist (might be more than loaded)
     pub total_tracks: u32,
     /// Whether there are more tracks to load
     pub has_more: bool,
@@ -336,7 +323,6 @@ pub struct PlaylistDetail {
 
 #[derive(Clone, Debug)]
 pub struct ArtistDetail {
-    pub id: String,
     pub name: String,
     pub genres: Vec<String>,
     pub top_tracks: Vec<SearchTrack>,
@@ -467,11 +453,6 @@ impl SpotifyClient {
         }
     }
 
-    /// Get a reference to the liked songs cache
-    pub fn liked_cache(&self) -> &LikedSongsCache {
-        &self.liked_songs_cache
-    }
-
     /// Initialize the liked songs cache - load from disk and optionally refresh from API
     pub async fn init_liked_songs_cache(&self) -> Result<()> {
         // First try to load from disk
@@ -487,7 +468,7 @@ impl SpotifyClient {
         use futures::StreamExt;
         use rspotify::prelude::Id;
 
-        debug!("Refreshing liked songs cache from API");
+        tracing::debug!("Refreshing liked songs cache from API");
 
         // Fetch all liked songs from API
         let tracks_stream = self.client.current_user_saved_tracks(None);
@@ -501,7 +482,7 @@ impl SpotifyClient {
             .filter_map(|saved| saved.track.id.map(|id| id.id().to_string()))
             .collect();
 
-        info!(count = track_ids.len(), "Liked songs cache refreshed");
+        tracing::info!(count = track_ids.len(), "Liked songs cache refreshed");
 
         // Update cache
         self.liked_songs_cache.update(track_ids).await;
@@ -510,11 +491,6 @@ impl SpotifyClient {
         let _ = self.liked_songs_cache.save_to_disk().await;
 
         Ok(())
-    }
-
-    /// Check if a track is liked (uses cache for fast lookup)
-    pub async fn is_track_liked(&self, track_id: &str) -> bool {
-        self.liked_songs_cache.is_liked(track_id).await
     }
 
     /// Mark tracks with their liked status using the cache
@@ -530,7 +506,7 @@ impl SpotifyClient {
             return Err(anyhow::anyhow!("Track ID is empty"));
         }
 
-        debug!(track_id, "Adding track to liked songs");
+        tracing::debug!(track_id, "Adding track to liked songs");
         let id = TrackId::from_id(track_id)?;
         self.client.current_user_saved_tracks_add([id]).await?;
 
@@ -538,7 +514,7 @@ impl SpotifyClient {
         self.liked_songs_cache.add(track_id.to_string()).await;
         let _ = self.liked_songs_cache.save_to_disk().await;
 
-        info!(track_id, "Added track to liked songs");
+        tracing::info!(track_id, "Added track to liked songs");
         Ok(())
     }
 
@@ -548,7 +524,7 @@ impl SpotifyClient {
             return Err(anyhow::anyhow!("Track ID is empty"));
         }
 
-        debug!(track_id, "Removing track from liked songs");
+        tracing::debug!(track_id, "Removing track from liked songs");
         let id = TrackId::from_id(track_id)?;
         self.client.current_user_saved_tracks_delete([id]).await?;
 
@@ -556,7 +532,7 @@ impl SpotifyClient {
         self.liked_songs_cache.remove(track_id).await;
         let _ = self.liked_songs_cache.save_to_disk().await;
 
-        info!(track_id, "Removed track from liked songs");
+        tracing::info!(track_id, "Removed track from liked songs");
         Ok(())
     }
 
@@ -574,10 +550,10 @@ impl SpotifyClient {
     }
 
     pub async fn get_current_playback(&self) -> Result<Option<CurrentPlaybackContext>> {
-        trace!("Fetching current playback state");
+        tracing::trace!("Fetching current playback state");
         let result = self.client.current_playback(None, None::<Vec<_>>).await?;
         if let Some(ref playback) = result {
-            trace!(
+            tracing::trace!(
                 is_playing = playback.is_playing,
                 device = ?playback.device.name,
                 "Got playback state"
@@ -594,7 +570,7 @@ impl SpotifyClient {
             // First, try to find the active device
             let active_device = devices.iter().find(|d| d.is_active);
             if let Some(device) = active_device {
-                debug!(device_name = %device.name, device_id = ?device.id, "Found active device");
+                tracing::debug!(device_name = %device.name, device_id = ?device.id, "Found active device");
                 return device.id.clone();
             }
 
@@ -602,27 +578,22 @@ impl SpotifyClient {
             if let Some(local_name) = &self.local_device_name {
                 let local_device = devices.iter().find(|d| &d.name == local_name);
                 if let Some(device) = local_device {
-                    debug!(device_name = %device.name, device_id = ?device.id, "No active device, using local device as fallback");
+                    tracing::debug!(device_name = %device.name, device_id = ?device.id, "No active device, using local device as fallback");
                     return device.id.clone();
                 }
             }
 
-            debug!(available_devices = devices.len(), "No active device found and local device not in list");
+            tracing::debug!(available_devices = devices.len(), "No active device found and local device not in list");
             None
         } else {
-            debug!("Failed to get devices list");
+            tracing::debug!("Failed to get devices list");
             None
         }
     }
 
-    /// Get the local librespot device name
-    pub fn get_local_device_name(&self) -> Option<&str> {
-        self.local_device_name.as_deref()
-    }
-
     pub async fn play(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(device_id = ?device_id, "API: resume_playback");
+        tracing::debug!(device_id = ?device_id, "API: resume_playback");
         self.client
             .resume_playback(device_id.as_deref(), None)
             .await?;
@@ -631,35 +602,35 @@ impl SpotifyClient {
 
     pub async fn pause(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(device_id = ?device_id, "API: pause_playback");
+        tracing::debug!(device_id = ?device_id, "API: pause_playback");
         self.client.pause_playback(device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn next_track(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(device_id = ?device_id, "API: next_track");
+        tracing::debug!(device_id = ?device_id, "API: next_track");
         self.client.next_track(device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn previous_track(&self) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(device_id = ?device_id, "API: previous_track");
+        tracing::debug!(device_id = ?device_id, "API: previous_track");
         self.client.previous_track(device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn set_shuffle(&self, state: bool) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(state, device_id = ?device_id, "API: set_shuffle");
+        tracing::debug!(state, device_id = ?device_id, "API: set_shuffle");
         self.client.shuffle(state, device_id.as_deref()).await?;
         Ok(())
     }
 
     pub async fn set_repeat(&self, state: RepeatState) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(state = ?state, device_id = ?device_id, "API: set_repeat");
+        tracing::debug!(state = ?state, device_id = ?device_id, "API: set_repeat");
         let repeat_state = match state {
             RepeatState::Off => rspotify::model::RepeatState::Off,
             RepeatState::All => rspotify::model::RepeatState::Context,
@@ -671,14 +642,14 @@ impl SpotifyClient {
 
     pub async fn set_volume(&self, volume: u8) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(volume, device_id = ?device_id, "API: set_volume");
+        tracing::debug!(volume, device_id = ?device_id, "API: set_volume");
         self.client.volume(volume, device_id.as_deref()).await?;
         Ok(())
     }
 
     /// Get list of available playback devices
     pub async fn get_available_devices(&self) -> Result<Vec<DeviceInfo>> {
-        debug!("API: get_available_devices");
+        tracing::debug!("API: get_available_devices");
         let devices = self.client.device().await?;
         let device_infos: Vec<DeviceInfo> = devices
             .into_iter()
@@ -686,10 +657,9 @@ impl SpotifyClient {
                 id: d.id.unwrap_or_default(),
                 name: d.name,
                 is_active: d.is_active,
-                volume_percent: d.volume_percent.map(|v| v as u8),
             })
             .collect();
-        debug!(count = device_infos.len(), "Found devices");
+        tracing::debug!(count = device_infos.len(), "Found devices");
         Ok(device_infos)
     }
 
@@ -704,19 +674,10 @@ impl SpotifyClient {
 
     /// Transfer playback to a specific device
     pub async fn transfer_playback_to_device(&self, device_id: &str, start_playing: bool) -> Result<()> {
-        debug!(device_id, start_playing, "API: transfer_playback");
+        tracing::debug!(device_id, start_playing, "API: transfer_playback");
         self.client
             .transfer_playback(device_id, Some(start_playing))
             .await?;
-        Ok(())
-    }
-
-    pub async fn transfer_playback(&self) -> Result<()> {
-        if let Some(device_id) = self.get_device_id().await {
-            self.client
-                .transfer_playback(&device_id, Some(true))
-                .await?;
-        }
         Ok(())
     }
 
@@ -760,7 +721,6 @@ impl SpotifyClient {
                     name: album.name,
                     artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     year: album.release_date.unwrap_or_default().chars().take(4).collect(),
-                    total_tracks: 0,
                 });
             }
         }
@@ -879,7 +839,6 @@ impl SpotifyClient {
             uri: format!("spotify:playlist:{}", playlist_id),
             name: playlist.name,
             owner: playlist.owner.display_name.clone().unwrap_or_else(|| playlist.owner.id.to_string()),
-            description: playlist.description.clone(),
             tracks,
             total_tracks,
             has_more,
@@ -969,12 +928,10 @@ impl SpotifyClient {
                 name: album.name,
                 artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                 year: album.release_date.unwrap_or_default().chars().take(4).collect(),
-                total_tracks: 0,
             })
             .collect();
 
         Ok(ArtistDetail {
-            id: artist_id.to_string(),
             name: artist.name,
             genres: artist.genres,
             top_tracks,
@@ -985,42 +942,18 @@ impl SpotifyClient {
     /// Play a specific track URI
     pub async fn play_track(&self, uri: &str) -> Result<()> {
         let device_id = self.get_device_id().await;
-        debug!(uri, device_id = ?device_id, "API: play_track");
+        tracing::debug!(uri, device_id = ?device_id, "API: play_track");
 
         // Extract track ID from URI (format: spotify:track:ID)
         let track_id = uri.split(':').last().unwrap_or(uri);
 
         self.client
             .start_uris_playback(
-                [PlayableId::Track(rspotify::model::TrackId::from_id(track_id)?)],
+                [PlayableId::Track(TrackId::from_id(track_id)?)],
                 device_id.as_deref(),
                 None,
                 None,
             )
-            .await?;
-        Ok(())
-    }
-
-    /// Play a context (album, playlist, artist)
-    pub async fn play_context(&self, uri: &str) -> Result<()> {
-        let device_id = self.get_device_id().await;
-
-        // Parse the URI to determine type
-        let play_context = if uri.contains(":album:") {
-            let id = uri.split(':').last().unwrap_or("");
-            PlayContextId::Album(AlbumId::from_id(id)?)
-        } else if uri.contains(":playlist:") {
-            let id = uri.split(':').last().unwrap_or("");
-            PlayContextId::Playlist(PlaylistId::from_id(id)?)
-        } else if uri.contains(":artist:") {
-            let id = uri.split(':').last().unwrap_or("");
-            PlayContextId::Artist(ArtistId::from_id(id)?)
-        } else {
-            return Err(anyhow::anyhow!("Unknown context type: {}", uri));
-        };
-
-        self.client
-            .start_context_playback(play_context, device_id.as_deref(), None, None)
             .await?;
         Ok(())
     }
@@ -1107,8 +1040,6 @@ impl SpotifyClient {
 
     /// Add a track to the queue
     pub async fn add_to_queue(&self, track_uri: &str) -> Result<()> {
-        use rspotify::prelude::Id;
-
         // Extract track ID from URI
         let track_id = track_uri.split(':').last().unwrap_or(track_uri);
         let id = TrackId::from_id(track_id)?;
@@ -1116,7 +1047,7 @@ impl SpotifyClient {
 
         self.client.add_item_to_queue(PlayableId::Track(id), device_id.as_deref()).await?;
 
-        info!(track_uri, "Added track to queue");
+        tracing::info!(track_uri, "Added track to queue");
         Ok(())
     }
 
@@ -1135,7 +1066,6 @@ impl SpotifyClient {
                 let id = playlist.id.id().to_string();
                 PlaylistItem {
                     id: id.clone(),
-                    uri: format!("spotify:playlist:{}", id),
                     name: playlist.name,
                 }
             })
@@ -1204,7 +1134,6 @@ impl SpotifyClient {
                     name: album.name,
                     artist: album.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     year: album.release_date.chars().take(4).collect(),
-                    total_tracks: album.tracks.total,
                 }
             })
             .collect();
@@ -1840,7 +1769,7 @@ impl AppModel {
     /// Add a track URI to the skip list (will be auto-skipped when it starts playing)
     pub async fn add_to_queue_skip_list(&self, uri: String) {
         let mut skip_list = self.queue_skip_list.write().await;
-        debug!(uri = %uri, "Adding track to queue skip list");
+        tracing::debug!(uri = %uri, "Adding track to queue skip list");
         skip_list.insert(uri);
     }
 
@@ -1860,26 +1789,8 @@ impl AppModel {
     pub async fn clear_queue_skip_list(&self) {
         let mut skip_list = self.queue_skip_list.write().await;
         if !skip_list.is_empty() {
-            debug!(count = skip_list.len(), "Clearing queue skip list");
+            tracing::debug!(count = skip_list.len(), "Clearing queue skip list");
             skip_list.clear();
-        }
-    }
-
-    /// Get the number of tracks in the skip list
-    pub async fn queue_skip_list_count(&self) -> usize {
-        let skip_list = self.queue_skip_list.read().await;
-        skip_list.len()
-    }
-
-    /// Mark a track in the queue view as skipped (for UI display)
-    pub async fn mark_queue_track_as_skipped(&self, uri: &str) {
-        let mut state = self.content_state.lock().await;
-        if let ContentView::Queue { queue, .. } = &mut state.view {
-            // We'll use a special marker - for now, we remove it from the view
-            // to match user expectations (they "deleted" it)
-            if let Some(pos) = queue.iter().position(|t| t.uri == uri) {
-                queue.remove(pos);
-            }
         }
     }
 
@@ -1913,14 +1824,6 @@ impl AppModel {
                 *section = section.next();
             }
             _ => {}
-        }
-    }
-
-    /// Navigate within artist detail sections
-    pub async fn navigate_artist_section(&self) {
-        let mut state = self.content_state.lock().await;
-        if let ContentView::ArtistDetail { ref mut section, .. } = state.view {
-            *section = section.next();
         }
     }
 
@@ -2084,42 +1987,28 @@ impl AppModel {
                 playlist_index,
             } => match section {
                 SearchResultSection::Tracks => results.tracks.get(*track_index).map(|t| {
-                    SelectedItem::Track {
-                        uri: t.uri.clone(),
-                        name: t.name.clone(),
-                    }
+                    SelectedItem::Track { uri: t.uri.clone() }
                 }),
                 SearchResultSection::Albums => results.albums.get(*album_index).map(|a| {
-                    SelectedItem::Album {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                    }
+                    SelectedItem::Album { id: a.id.clone() }
                 }),
                 SearchResultSection::Artists => results.artists.get(*artist_index).map(|a| {
-                    SelectedItem::Artist {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                    }
+                    SelectedItem::Artist { id: a.id.clone() }
                 }),
                 SearchResultSection::Playlists => results.playlists.get(*playlist_index).map(|p| {
-                    SelectedItem::Playlist {
-                        id: p.id.clone(),
-                        name: p.name.clone(),
-                    }
+                    SelectedItem::Playlist { id: p.id.clone() }
                 }),
             },
             ContentView::AlbumDetail { detail, selected_index } => {
                 detail.tracks.get(*selected_index).map(|t| SelectedItem::AlbumTrack {
                     album_uri: format!("spotify:album:{}", detail.id),
                     track_uri: t.uri.clone(),
-                    name: t.name.clone(),
                 })
             }
             ContentView::PlaylistDetail { detail, selected_index } => {
                 detail.tracks.get(*selected_index).map(|t| SelectedItem::PlaylistTrack {
                     playlist_uri: detail.uri.clone(),
                     track_uri: t.uri.clone(),
-                    name: t.name.clone(),
                 })
             }
             ContentView::ArtistDetail {
@@ -2129,47 +2018,26 @@ impl AppModel {
                 album_index,
             } => match section {
                 ArtistDetailSection::TopTracks => detail.top_tracks.get(*track_index).map(|t| {
-                    SelectedItem::Track {
-                        uri: t.uri.clone(),
-                        name: t.name.clone(),
-                    }
+                    SelectedItem::Track { uri: t.uri.clone() }
                 }),
                 ArtistDetailSection::Albums => detail.albums.get(*album_index).map(|a| {
-                    SelectedItem::Album {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                    }
+                    SelectedItem::Album { id: a.id.clone() }
                 }),
             },
             ContentView::LikedSongs { tracks, selected_index } => {
-                tracks.get(*selected_index).map(|t| SelectedItem::Track {
-                    uri: t.uri.clone(),
-                    name: t.name.clone(),
-                })
+                tracks.get(*selected_index).map(|t| SelectedItem::Track { uri: t.uri.clone(), })
             }
             ContentView::RecentlyPlayed { tracks, selected_index } => {
-                tracks.get(*selected_index).map(|t| SelectedItem::Track {
-                    uri: t.uri.clone(),
-                    name: t.name.clone(),
-                })
+                tracks.get(*selected_index).map(|t| SelectedItem::Track { uri: t.uri.clone() })
             }
             ContentView::SavedAlbums { albums, selected_index } => {
-                albums.get(*selected_index).map(|a| SelectedItem::Album {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                })
+                albums.get(*selected_index).map(|a| SelectedItem::Album { id: a.id.clone() })
             }
             ContentView::FollowedArtists { artists, selected_index } => {
-                artists.get(*selected_index).map(|a| SelectedItem::Artist {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                })
+                artists.get(*selected_index).map(|a| SelectedItem::Artist { id: a.id.clone() })
             }
             ContentView::Queue { queue, selected_index, .. } => {
-                queue.get(*selected_index).map(|t| SelectedItem::Track {
-                    uri: t.uri.clone(),
-                    name: t.name.clone(),
-                })
+                queue.get(*selected_index).map(|t| SelectedItem::Track { uri: t.uri.clone() })
             }
             ContentView::Empty => None,
         }
@@ -2252,7 +2120,7 @@ impl AppModel {
         };
 
         if let Some((ref id, liked)) = result {
-            debug!(track_id = %id, liked, "Selected track for like toggle");
+            tracing::debug!(track_id = %id, liked, "Selected track for like toggle");
         }
 
         result
@@ -2303,16 +2171,6 @@ impl AppModel {
                 }
             }
             _ => {}
-        }
-    }
-
-    /// Get the selected track URI in the queue for removal
-    pub async fn get_selected_queue_track_uri(&self) -> Option<String> {
-        let state = self.content_state.lock().await;
-        if let ContentView::Queue { queue, selected_index, .. } = &state.view {
-            queue.get(*selected_index).map(|t| t.uri.clone())
-        } else {
-            None
         }
     }
 
@@ -2367,12 +2225,12 @@ impl AppModel {
 /// Represents a selected item for action handling
 #[derive(Clone, Debug)]
 pub enum SelectedItem {
-    Track { uri: String, name: String },
-    Album { id: String, name: String },
-    Artist { id: String, name: String },
-    Playlist { id: String, name: String },
+    Track { uri: String },
+    Album { id: String },
+    Artist { id: String },
+    Playlist { id: String },
     /// A track within a playlist context (for playing from that track)
-    PlaylistTrack { playlist_uri: String, track_uri: String, name: String },
+    PlaylistTrack { playlist_uri: String, track_uri: String },
     /// A track within an album context (for playing from that track)
-    AlbumTrack { album_uri: String, track_uri: String, name: String },
+    AlbumTrack { album_uri: String, track_uri: String },
 }

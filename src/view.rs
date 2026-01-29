@@ -133,7 +133,7 @@ impl AppView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(6), // Library (4 items + 2 border lines)
+                Constraint::Length(6), // Library (4 items + 2 borderlines)
                 Constraint::Min(0),    // Playlists (fills remaining space)
             ])
             .split(area);

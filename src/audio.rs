@@ -10,7 +10,7 @@ use librespot::playback::{audio_backend, mixer};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing;
 
 const DEVICE_NAME: &str = "Spotify-RS";
 
@@ -44,9 +44,9 @@ impl AudioPlayer {
     /// - activate: whether to activate the device immediately
     async fn new_internal(auth: AuthResult, silent: bool, activate: bool) -> Result<Self> {
         if !silent {
-            info!("Initializing audio backend...");
+            tracing::info!("Initializing audio backend...");
         }
-        debug!(device_name = DEVICE_NAME, "Creating audio player");
+        tracing::debug!(device_name = DEVICE_NAME, "Creating audio player");
 
         // Create session configuration
         let session_config = SessionConfig {
@@ -99,7 +99,7 @@ impl AudioPlayer {
         // Only activate if requested
         let is_active = if activate {
             spirc.activate()?;
-            debug!("Audio device activated");
+            tracing::debug!("Audio device activated");
             true
         } else {
             false
@@ -110,9 +110,9 @@ impl AudioPlayer {
         });
 
         if !silent {
-            info!(device_name = DEVICE_NAME, "Audio backend ready");
+            tracing::info!(device_name = DEVICE_NAME, "Audio backend ready");
         }
-        debug!(device_id = %Self::get_device_id(), is_active, "Audio player created");
+        tracing::debug!(device_id = %Self::get_device_id(), is_active, "Audio player created");
 
         Ok(Self {
             player,
@@ -127,7 +127,7 @@ impl AudioPlayer {
         if !self.is_active {
             self.spirc.activate()?;
             self.is_active = true;
-            info!(device_name = DEVICE_NAME, "Audio device activated for Spotify Connect");
+            tracing::info!(device_name = DEVICE_NAME, "Audio device activated for Spotify Connect");
         }
         Ok(())
     }
@@ -173,11 +173,6 @@ impl AudioBackend {
         AudioPlayer::get_device_name()
     }
 
-    /// Check if the audio backend is currently initialized
-    pub async fn is_initialized(&self) -> bool {
-        self.inner.lock().await.is_some()
-    }
-
     /// Check if the audio backend is activated (available for Spotify Connect)
     pub async fn is_active(&self) -> bool {
         let guard = self.inner.lock().await;
@@ -205,7 +200,7 @@ impl AudioBackend {
     /// Restart the audio backend (silently, for recovery)
     /// Returns the player event channel for listening to playback events
     pub async fn restart(&self) -> Result<PlayerEventChannel> {
-        info!("Restarting audio backend for recovery");
+        tracing::info!("Restarting audio backend for recovery");
         // Drop the old player
         {
             let mut guard = self.inner.lock().await;
@@ -224,7 +219,7 @@ impl AudioBackend {
             *guard = Some(new_player);
         }
 
-        info!("Audio backend restarted successfully");
+        tracing::info!("Audio backend restarted successfully");
         Ok(event_channel)
     }
 
@@ -233,7 +228,7 @@ impl AudioBackend {
         let guard = self.inner.lock().await;
         if let Some(player) = guard.as_ref() {
             player.spirc.next()?;
-            debug!("Skipped to next track via spirc");
+            tracing::debug!("Skipped to next track via spirc");
         }
         Ok(())
     }

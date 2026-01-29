@@ -4,7 +4,7 @@ use librespot::metadata::audio::UniqueFields;
 use librespot::playback::player::{PlayerEvent, PlayerEventChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, trace, warn};
+use tracing;
 
 use crate::audio::AudioBackend;
 use crate::model::{ActiveSection, AppModel, SelectedItem, TrackMetadata};
@@ -294,14 +294,14 @@ impl AppController {
     }
 
     async fn perform_search(&self, query: &str) {
-        debug!(query, "Performing search");
+        tracing::debug!(query, "Performing search");
         let model = self.model.lock().await;
         model.set_content_loading(true).await;
 
         if let Some(spotify) = &model.spotify {
             match spotify.search(query, SEARCH_LIMIT as u32).await {
                 Ok(mut results) => {
-                    info!(
+                    tracing::info!(
                         query,
                         tracks = results.tracks.len(),
                         albums = results.albums.len(),
@@ -317,7 +317,7 @@ impl AppController {
                     ui_state.active_section = ActiveSection::MainContent;
                 }
                 Err(e) => {
-                    error!(query, error = %e, "Search failed");
+                    tracing::error!(query, error = %e, "Search failed");
                     model.set_content_loading(false).await;
                     let error_msg = Self::format_error(&e);
                     model.set_error(error_msg).await;
@@ -479,7 +479,7 @@ impl AppController {
     async fn toggle_playback(&self) {
         let model = self.model.lock().await;
         let is_playing = model.is_playing().await;
-        debug!(is_playing, "Toggling playback");
+        tracing::debug!(is_playing, "Toggling playback");
 
         // If we're about to play (not pause), ensure we have a device
         if !is_playing {
@@ -510,19 +510,19 @@ impl AppController {
             };
 
             if let Err(e) = self.with_backend_recovery(operation).await {
-                error!(error = %e, "Toggle playback failed");
+                tracing::error!(error = %e, "Toggle playback failed");
                 let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             } else {
-                info!(action = if is_playing { "paused" } else { "resumed" }, "Playback toggled");
+                tracing::info!(action = if is_playing { "paused" } else { "resumed" }, "Playback toggled");
             }
             // Note: State will be updated via player events, no need to poll
         }
     }
 
     async fn next_track(&self) {
-        debug!("Skipping to next track");
+        tracing::debug!("Skipping to next track");
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
@@ -535,12 +535,12 @@ impl AppController {
             };
 
             if let Err(e) = self.with_backend_recovery(operation).await {
-                error!(error = %e, "Next track failed");
+                tracing::error!(error = %e, "Next track failed");
                 let model = self.model.lock().await;
                 let error_msg = Self::format_error(&e);
                 model.set_error(error_msg).await;
             } else {
-                info!("Skipped to next track");
+                tracing::info!("Skipped to next track");
             }
         }
         // Note: State will be updated via player events
@@ -741,7 +741,7 @@ impl AppController {
     /// Select a device for playback
     async fn select_device(&self, device: &crate::model::DeviceInfo, local_device_name: &str) {
         let is_local_device = device.name == local_device_name;
-        info!(device_name = %device.name, device_id = %device.id, is_local_device, "Selecting playback device");
+        tracing::info!(device_name = %device.name, device_id = %device.id, is_local_device, "Selecting playback device");
 
         if is_local_device {
             // Wait for backend to be ready (up to 5 seconds)
@@ -758,14 +758,14 @@ impl AppController {
             let backend_guard = self.audio_backend.lock().await;
             if let Some(backend) = backend_guard.as_ref() {
                 if let Err(e) = backend.activate().await {
-                    error!(error = %e, "Failed to activate local audio backend");
+                    tracing::error!(error = %e, "Failed to activate local audio backend");
                     drop(backend_guard);
                     let model = self.model.lock().await;
                     model.set_error(format!("Failed to activate audio: {}", e)).await;
                     return;
                 }
             } else {
-                warn!("Audio backend not ready when trying to select local device");
+                tracing::warn!("Audio backend not ready when trying to select local device");
                 drop(backend_guard);
                 let model = self.model.lock().await;
                 model.set_error("Audio backend not ready".to_string()).await;
@@ -780,7 +780,7 @@ impl AppController {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         } else {
             // If switching away from local device, stop playback on it
-            debug!("Switching away from local device, stopping local playback");
+            tracing::debug!("Switching away from local device, stopping local playback");
             let backend_guard = self.audio_backend.lock().await;
             if let Some(backend) = backend_guard.as_ref() {
                 backend.stop().await;
@@ -793,12 +793,12 @@ impl AppController {
             // Transfer playback to the selected device
             match spotify.transfer_playback_to_device(&device.id, true).await {
                 Ok(()) => {
-                    info!(device_name = %device.name, "Playback transferred successfully");
+                    tracing::info!(device_name = %device.name, "Playback transferred successfully");
                     // Update the displayed device name
                     model.update_device_name(device.name.clone()).await;
                 }
                 Err(e) => {
-                    error!(device_name = %device.name, error = %e, "Failed to transfer playback");
+                    tracing::error!(device_name = %device.name, error = %e, "Failed to transfer playback");
                     let error_msg = Self::format_error(&e);
                     model.set_error(error_msg).await;
                 }
@@ -812,13 +812,13 @@ impl AppController {
     /// If no device is active, activates the local audio backend
     /// Returns true if a device is available
     pub async fn ensure_device_available(&self) -> bool {
-        debug!("Checking for available playback device");
+        tracing::debug!("Checking for available playback device");
         // First check if our local backend is already active
         {
             let backend_guard = self.audio_backend.lock().await;
             if let Some(backend) = backend_guard.as_ref() {
                 if backend.is_active().await {
-                    debug!("Local backend already active");
+                    tracing::debug!("Local backend already active");
                     return true;
                 }
             }
@@ -829,13 +829,13 @@ impl AppController {
             let model = self.model.lock().await;
             if let Some(spotify) = &model.spotify {
                 if spotify.has_active_device().await {
-                    debug!("Found active device on Spotify");
+                    tracing::debug!("Found active device on Spotify");
                     return true;
                 }
             }
         }
 
-        debug!("No active device found, activating local backend");
+        tracing::debug!("No active device found, activating local backend");
         // No active device - wait for backend to be ready (up to 5 seconds)
         for _ in 0..50 {
             let backend_guard = self.audio_backend.lock().await;
@@ -871,23 +871,23 @@ impl AppController {
                         // Find our device by name
                         if let Ok(devices) = spotify.get_available_devices().await {
                             if let Some(our_device) = devices.iter().find(|d| d.name == local_device_name) {
-                                info!(device_name = %local_device_name, device_id = %our_device.id, "Transferring playback to local device");
+                                tracing::info!(device_name = %local_device_name, device_id = %our_device.id, "Transferring playback to local device");
                                 // Transfer playback to make our device active (don't start playing yet)
                                 if let Err(e) = spotify.transfer_playback_to_device(&our_device.id, false).await {
-                                    warn!(error = %e, "Failed to transfer playback to local device, will try during play");
+                                    tracing::warn!(error = %e, "Failed to transfer playback to local device, will try during play");
                                 }
                             } else {
-                                warn!(device_name = %local_device_name, "Local device not found in available devices list");
-                                debug!(?devices, "Available devices");
+                                tracing::warn!(device_name = %local_device_name, "Local device not found in available devices list");
+                                tracing::debug!(?devices, "Available devices");
                             }
                         }
                     }
 
-                    info!("Local audio backend activated for playback");
+                    tracing::info!("Local audio backend activated for playback");
                     true
                 }
                 Err(e) => {
-                    error!(error = %e, "Failed to activate local audio backend");
+                    tracing::error!(error = %e, "Failed to activate local audio backend");
                     drop(backend_guard);
                     let model = self.model.lock().await;
                     model.set_error(format!("Failed to activate audio: {}", e)).await;
@@ -895,7 +895,7 @@ impl AppController {
                 }
             }
         } else {
-            warn!("Audio backend not ready after waiting");
+            tracing::warn!("Audio backend not ready after waiting");
             // Backend still not ready after waiting
             let model = self.model.lock().await;
             model.set_error("Audio backend not ready. Please try again.".to_string()).await;
@@ -1035,7 +1035,7 @@ impl AppController {
 
     /// Load more tracks for a playlist (pagination)
     async fn load_more_playlist_tracks(&self, playlist_id: &str, offset: usize) {
-        debug!(playlist_id, offset, "Loading more playlist tracks");
+        tracing::debug!(playlist_id, offset, "Loading more playlist tracks");
 
         let model = self.model.lock().await;
         model.set_playlist_loading_more(true).await;
@@ -1047,7 +1047,7 @@ impl AppController {
 
             match spotify_clone.get_more_playlist_tracks(&playlist_id, offset).await {
                 Ok((mut tracks, _total_tracks, has_more)) => {
-                    info!(
+                    tracing::info!(
                         playlist_id,
                         loaded = tracks.len(),
                         has_more,
@@ -1060,7 +1060,7 @@ impl AppController {
                     model.append_playlist_tracks(tracks, has_more).await;
                 }
                 Err(e) => {
-                    error!(playlist_id, error = %e, "Failed to load more playlist tracks");
+                    tracing::error!(playlist_id, error = %e, "Failed to load more playlist tracks");
                     let model = self.model.lock().await;
                     model.set_playlist_loading_more(false).await;
                     let error_msg = Self::format_error(&e);
@@ -1134,54 +1134,6 @@ impl AppController {
                 // Switch to MainContent section to show results
                 let mut ui_state = model.ui_state.lock().await;
                 ui_state.active_section = ActiveSection::MainContent;
-            }
-        }
-    }
-
-    /// Play a playlist from the beginning
-    pub async fn play_playlist_from_start(&self, uri: &str) {
-        let model = self.model.lock().await;
-
-        if let Some(spotify) = &model.spotify {
-            let spotify_clone = spotify.clone();
-            let uri_clone = uri.to_string();
-            drop(model);
-
-            let operation = move || {
-                let spotify = spotify_clone.clone();
-                let uri = uri_clone.clone();
-                async move { spotify.play_context(&uri).await }
-            };
-
-            if let Err(e) = self.with_backend_recovery(operation).await {
-                let model = self.model.lock().await;
-                let error_msg = Self::format_error(&e);
-                model.set_error(error_msg).await;
-            }
-        }
-    }
-
-    /// Play a playlist starting from a specific track
-    pub async fn play_playlist_from_track(&self, playlist_uri: &str, track_uri: &str) {
-        let model = self.model.lock().await;
-
-        if let Some(spotify) = &model.spotify {
-            let spotify_clone = spotify.clone();
-            let playlist_uri_clone = playlist_uri.to_string();
-            let track_uri_clone = track_uri.to_string();
-            drop(model);
-
-            let operation = move || {
-                let spotify = spotify_clone.clone();
-                let playlist_uri = playlist_uri_clone.clone();
-                let track_uri = track_uri_clone.clone();
-                async move { spotify.play_context_from_track_uri(&playlist_uri, &track_uri).await }
-            };
-
-            if let Err(e) = self.with_backend_recovery(operation).await {
-                let model = self.model.lock().await;
-                let error_msg = Self::format_error(&e);
-                model.set_error(error_msg).await;
             }
         }
     }
@@ -1262,7 +1214,7 @@ impl AppController {
         match operation().await {
             Ok(()) => Ok(()),
             Err(e) => {
-                debug!(error = %e, "Playback operation failed, checking if recovery is needed");
+                tracing::debug!(error = %e, "Playback operation failed, checking if recovery is needed");
 
                 // Check if this is a device unavailable error and the local backend exists
                 let local_backend_exists = {
@@ -1271,10 +1223,10 @@ impl AppController {
                 };
 
                 let is_device_error = Self::is_device_unavailable_error(&e);
-                debug!(is_device_error, local_backend_exists, "Recovery check");
+                tracing::debug!(is_device_error, local_backend_exists, "Recovery check");
 
                 if is_device_error && local_backend_exists {
-                    info!("Device unavailable error detected, attempting backend recovery");
+                    tracing::info!("Device unavailable error detected, attempting backend recovery");
                     // Try to restart the local backend
                     if let Some(event_channel) = self.try_restart_audio_backend().await {
                         // Start listening to events from the new backend
@@ -1285,14 +1237,14 @@ impl AppController {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                         // Retry the operation
-                        debug!("Retrying playback operation after backend recovery");
+                        tracing::debug!("Retrying playback operation after backend recovery");
                         return match operation().await {
                             Ok(()) => {
-                                info!("Playback operation succeeded after recovery");
+                                tracing::info!("Playback operation succeeded after recovery");
                                 Ok(())
                             }
                             Err(retry_err) => {
-                                error!(error = %retry_err, "Playback operation failed even after recovery");
+                                tracing::error!(error = %retry_err, "Playback operation failed even after recovery");
                                 Err(retry_err)
                             }
                         }
@@ -1310,34 +1262,34 @@ impl AppController {
         audio_backend: Arc<Mutex<Option<AudioBackend>>>,
     ) {
         let model = self.model.clone();
-        info!("Starting librespot player event listener");
+        tracing::info!("Starting librespot player event listener");
 
         tokio::spawn(async move {
             while let Some(event) = event_channel.recv().await {
                 let model_guard = model.lock().await;
 
                 if model_guard.should_quit().await {
-                    debug!("Player event listener shutting down");
+                    tracing::debug!("Player event listener shutting down");
                     break;
                 }
 
                 match event {
                     PlayerEvent::Playing { position_ms, .. } => {
-                        trace!(position_ms, "PlayerEvent::Playing");
+                        tracing::trace!(position_ms, "PlayerEvent::Playing");
                         model_guard.update_playback_position(position_ms, true).await;
                     }
                     PlayerEvent::Paused { position_ms, .. } => {
-                        debug!(position_ms, "PlayerEvent::Paused");
+                        tracing::debug!(position_ms, "PlayerEvent::Paused");
                         model_guard.update_playback_position(position_ms, false).await;
                     }
                     PlayerEvent::PositionChanged { position_ms, .. } => {
                         // Periodic position update - keep current playing state
-                        trace!(position_ms, "PlayerEvent::PositionChanged");
+                        tracing::trace!(position_ms, "PlayerEvent::PositionChanged");
                         let is_playing = model_guard.is_playing().await;
                         model_guard.update_playback_position(position_ms, is_playing).await;
                     }
                     PlayerEvent::Seeked { position_ms, .. } => {
-                        debug!(position_ms, "PlayerEvent::Seeked");
+                        tracing::debug!(position_ms, "PlayerEvent::Seeked");
                         let is_playing = model_guard.is_playing().await;
                         model_guard.update_playback_position(position_ms, is_playing).await;
                     }
@@ -1367,7 +1319,7 @@ impl AppController {
 
                         // Check if this track is in the skip list
                         if model_guard.is_in_queue_skip_list(&uri).await {
-                            info!(
+                            tracing::info!(
                                 track = %audio_item.name,
                                 uri = %uri,
                                 "Track is in skip list, auto-skipping"
@@ -1382,13 +1334,13 @@ impl AppController {
                             let backend_guard = audio_backend.lock().await;
                             if let Some(backend) = backend_guard.as_ref() {
                                 if let Err(e) = backend.skip_to_next().await {
-                                    error!(error = %e, "Failed to auto-skip track");
+                                    tracing::error!(error = %e, "Failed to auto-skip track");
                                 }
                             }
                             continue; // Don't update track info since we're skipping
                         }
 
-                        info!(
+                        tracing::info!(
                             track = %audio_item.name,
                             artist = %artist,
                             album = %album,
@@ -1407,22 +1359,22 @@ impl AppController {
                         model_guard.update_track_info(track).await;
                     }
                     PlayerEvent::Stopped { .. } => {
-                        debug!("PlayerEvent::Stopped");
+                        tracing::debug!("PlayerEvent::Stopped");
                         model_guard.update_playback_position(0, false).await;
                     }
                     PlayerEvent::Loading { position_ms, .. } => {
                         // Track is loading, update position
-                        debug!(position_ms, "PlayerEvent::Loading");
+                        tracing::debug!(position_ms, "PlayerEvent::Loading");
                         model_guard.update_playback_position(position_ms, false).await;
                     }
                     PlayerEvent::EndOfTrack { .. } => {
                         // Track ended, will transition to next track
-                        debug!("PlayerEvent::EndOfTrack");
+                        tracing::debug!("PlayerEvent::EndOfTrack");
                         model_guard.set_playing(false).await;
                     }
                     _ => {
                         // Ignore other events (volume, session, shuffle, repeat, etc.)
-                        trace!("PlayerEvent: other event received");
+                        tracing::trace!("PlayerEvent: other event received");
                     }
                 }
             }
