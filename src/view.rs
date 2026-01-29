@@ -1,7 +1,7 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph},
     Frame,
 };
@@ -386,7 +386,7 @@ impl AppView {
             format!(" Playlists ({}) ", results.playlists.len()),
         ];
 
-        let tabs_content: Vec<ratatui::text::Span> = tab_titles
+        let tabs_content: Vec<Span> = tab_titles
             .iter()
             .enumerate()
             .flat_map(|(i, title)| {
@@ -402,8 +402,8 @@ impl AppView {
                     Style::default().fg(Color::DarkGray)
                 };
                 vec![
-                    ratatui::text::Span::styled(title.clone(), style),
-                    ratatui::text::Span::raw("  "),
+                    Span::styled(title.clone(), style),
+                    Span::raw("  "),
                 ]
             })
             .collect();
@@ -583,7 +583,7 @@ impl AppView {
 
         // Header
         let header_text = format!(
-            " 💿 {} by {} ({})\n {} tracks | Enter: Play from selected | Backspace: Go back",
+            "💿 {} by {} ({})\n {} tracks | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.artist,
             detail.year,
@@ -591,7 +591,10 @@ impl AppView {
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+            .block(Block::default()
+            .padding(Padding::horizontal(1))
+            .borders(Borders::ALL)
+            .border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Calculate available width for content
@@ -690,7 +693,7 @@ impl AppView {
         // Header - show total track count and loading indicator if loading more
         let loading_indicator = if detail.loading_more { " (loading...)" } else { "" };
         let header_text = format!(
-            " 📻 {} by {}\n {} tracks{} | Enter: Play from selected | Backspace: Go back",
+            "📻 {} by {}\n {} tracks{} | Enter: Play from selected | Backspace: Go back",
             detail.name,
             detail.owner,
             detail.total_tracks,
@@ -698,7 +701,10 @@ impl AppView {
         );
         let header = Paragraph::new(header_text)
             .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+            .block(Block::default()
+            .padding(Padding::horizontal(1))
+            .borders(Borders::ALL)
+            .border_style(border_style));
         frame.render_widget(header, chunks[0]);
 
         // Calculate available width for content
@@ -1011,9 +1017,15 @@ impl AppView {
         if let Some(ref error_msg) = ui_state.error_message {
             let area = frame.area();
 
-            // Calculate centered popup size
-            let popup_width = error_msg.len().min(60_usize) as u16 + 4;
-            let popup_height = 5;
+            // Fixed width popup (responsive to screen size)
+            let popup_width = 50.min(area.width.saturating_sub(4));
+            let inner_width = popup_width.saturating_sub(4) as usize; // account for borders
+
+            // Calculate how many lines the error message will take when wrapped
+            let error_line_count = ((error_msg.len() as f32) / (inner_width as f32)).ceil() as u16;
+
+            // Height: top border (1) + error lines + empty line + hint (1) + bottom border (1)
+            let popup_height = 3 + error_line_count.max(1);
 
             let popup_x = area.width.saturating_sub(popup_width) / 2;
             let popup_y = area.height.saturating_sub(popup_height) / 2;
@@ -1028,19 +1040,17 @@ impl AppView {
             // Clear the area behind the popup first
             frame.render_widget(Clear, popup_area);
 
-            // Create error popup
-            let error_text = format!("⚠ {}", error_msg);
-            let error_widget = Paragraph::new(error_text)
-                .style(
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
-                )
+            // Create text with error message and dismiss hint
+
+            let error_widget = Paragraph::new(error_msg.to_string())
+                .style(Style::default().fg(Color::Red))
+                .wrap(ratatui::widgets::Wrap { trim: false })
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Red))
-                        .title(" Error ")
+                        .title(" ⚠️  Error ")
+                        .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
                         .style(Style::default().bg(Color::Black)),
                 );
 
@@ -1335,7 +1345,7 @@ impl AppView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5), // Currently playing
+                Constraint::Length(3), // Currently playing
                 Constraint::Min(0),    // Queue
             ])
             .split(area);
