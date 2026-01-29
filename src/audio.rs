@@ -227,4 +227,14 @@ impl AudioBackend {
         info!("Audio backend restarted successfully");
         Ok(event_channel)
     }
+
+    /// Skip to the next track (used for auto-skip when a track is in the skip list)
+    pub async fn skip_to_next(&self) -> Result<()> {
+        let guard = self.inner.lock().await;
+        if let Some(player) = guard.as_ref() {
+            player.spirc.next()?;
+            debug!("Skipped to next track via spirc");
+        }
+        Ok(())
+    }
 }

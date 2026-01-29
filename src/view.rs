@@ -337,6 +337,17 @@ impl AppView {
                     is_focused,
                 );
             }
+            ContentView::Queue { currently_playing, queue, selected_index } => {
+                Self::render_queue(
+                    frame,
+                    area,
+                    currently_playing.as_ref(),
+                    queue,
+                    *selected_index,
+                    is_focused,
+                    current_playing_uri,
+                );
+            }
         }
     }
 
@@ -1303,5 +1314,126 @@ impl AppView {
         list_state.select(Some(selected_index));
 
         frame.render_stateful_widget(list, area, &mut list_state);
+    }
+
+    /// Render the queue view
+    fn render_queue(
+        frame: &mut Frame,
+        area: Rect,
+        currently_playing: Option<&crate::model::SearchTrack>,
+        queue: &[crate::model::SearchTrack],
+        selected_index: usize,
+        is_focused: bool,
+        current_playing_uri: Option<&str>,
+    ) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5), // Currently playing
+                Constraint::Min(0),    // Queue
+            ])
+            .split(area);
+
+        // Currently playing section
+        let cp_text = if let Some(track) = currently_playing {
+            let liked = if track.liked { "💚 " } else { "" };
+            format!(
+                "{}{}  -  {} ({})",
+                liked,
+                track.name,
+                track.artist,
+                track.album,
+            )
+        } else {
+            "No track playing".to_string()
+        };
+        let cp_widget = Paragraph::new(cp_text)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default()
+            .padding(Padding::horizontal(1))
+            .borders(Borders::ALL).title(" 🎵 Now Playing ").border_style(border_style));
+        frame.render_widget(cp_widget, chunks[0]);
+
+        // Queue section
+        let content_width = chunks[1].width.saturating_sub(4) as usize;
+        let num_width = 3;
+        let liked_width = 2;
+        let duration_width = 8;
+        let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
+        let remaining_width = content_width.saturating_sub(fixed_width);
+        let title_width = (remaining_width * 55) / 100;
+        let artist_width = remaining_width.saturating_sub(title_width);
+
+        // Create header as first item
+        let mut list_items: Vec<ListItem> = vec![
+            ListItem::new(format!(
+                " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
+                "#", "  ", "Title", "Artist", "Duration",
+                num_width = num_width - 1,
+                title_width = title_width,
+                artist_width = artist_width
+            ))
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ];
+
+        if queue.is_empty() {
+            list_items.push(
+                ListItem::new("       Queue is empty")
+                    .style(Style::default().fg(Color::DarkGray))
+            );
+        } else {
+            // Add queue items
+            let track_items: Vec<ListItem> = queue
+                .iter()
+                .enumerate()
+                .map(|(i, track)| {
+                    let duration = Self::format_duration(track.duration_ms);
+                    let is_playing = current_playing_uri.map_or(false, |uri| uri == track.uri);
+                    let style = if i == selected_index && is_focused {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if is_playing {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else if i == selected_index {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+
+                    let liked_indicator = if track.liked { "💚" } else { "  " };
+                    let playing_indicator = if is_playing { "▶" } else { " " };
+                    let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+
+                    let title_str = if track.name.len() > title_width {
+                        format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                    } else {
+                        format!("{:<width$}", track.name, width = title_width)
+                    };
+
+                    let artist_str = if track.artist.len() > artist_width {
+                        format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                    } else {
+                        format!("{:<width$}", track.artist, width = artist_width)
+                    };
+
+                    ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
+                })
+                .collect();
+
+            list_items.extend(track_items);
+        }
+
+        let queue_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Up Next ")
+            .padding(Padding::horizontal(1))
+            .border_style(border_style);
+
+        Self::render_scrollable_list(frame, chunks[1], list_items, selected_index + 1, queue_block);
     }
 }

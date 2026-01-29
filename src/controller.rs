@@ -38,9 +38,10 @@ impl AppController {
         if let Some(backend) = backend_guard.as_ref() {
             if let Some(event_channel) = backend.get_player_event_channel().await {
                 *started = true;
+                let audio_backend = self.audio_backend.clone();
                 drop(backend_guard);
                 drop(started);
-                self.start_player_event_listener(event_channel);
+                self.start_player_event_listener(event_channel, audio_backend);
             }
         }
     }
@@ -173,6 +174,25 @@ impl AppController {
                     }
                     return Ok(());
                 }
+                KeyCode::Char('k') | KeyCode::Char('K') => {
+                    // Add selected track to queue
+                    if let Some(track_uri) = model.get_selected_track_uri().await {
+                        drop(model);
+                        self.add_track_to_queue(&track_uri).await;
+                    }
+                    return Ok(());
+                }
+                KeyCode::Delete => {
+                    // Remove track from queue (via skip list - will auto-skip when it tries to play)
+                    if let Some(index) = model.get_selected_queue_index().await {
+                        if let Some(uri) = model.remove_from_queue_view(index).await {
+                            // Add to skip list so it gets auto-skipped when Spotify tries to play it
+                            model.add_to_queue_skip_list(uri).await;
+                            tracing::info!("Track added to skip list (will be auto-skipped)");
+                        }
+                    }
+                    return Ok(());
+                }
                 _ => {}
             }
         }
@@ -255,6 +275,19 @@ impl AppController {
                 drop(model);
                 self.open_device_picker().await;
             }
+            KeyCode::Char('g') | KeyCode::Char('G') => {
+                // Focus search
+                model.set_active_section(ActiveSection::Search).await;
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                // Focus playlists
+                model.set_active_section(ActiveSection::Playlists).await;
+            }
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                // Show queue
+                drop(model);
+                self.show_queue().await;
+            }
             _ => {}
         }
         Ok(())
@@ -302,6 +335,9 @@ impl AppController {
                 }
 
                 let model = self.model.lock().await;
+                // Clear skip list when playing new content
+                model.clear_queue_skip_list().await;
+
                 if let Some(spotify) = &model.spotify {
                     let spotify_clone = spotify.clone();
                     let uri_clone = uri.clone();
@@ -327,6 +363,9 @@ impl AppController {
                 }
 
                 let model = self.model.lock().await;
+                // Clear skip list when playing new content
+                model.clear_queue_skip_list().await;
+
                 if let Some(spotify) = &model.spotify {
                     let spotify_clone = spotify.clone();
                     let playlist_uri_clone = playlist_uri.clone();
@@ -354,6 +393,9 @@ impl AppController {
                 }
 
                 let model = self.model.lock().await;
+                // Clear skip list when playing new content
+                model.clear_queue_skip_list().await;
+
                 if let Some(spotify) = &model.spotify {
                     let spotify_clone = spotify.clone();
                     let album_uri_clone = album_uri.clone();
@@ -619,6 +661,53 @@ impl AppController {
 
                     let status = if new_liked_status { "added to" } else { "removed from" };
                     tracing::info!(track_id, status, "Track liked status toggled");
+                }
+                Err(e) => {
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Show the playback queue
+    async fn show_queue(&self) {
+        let model = self.model.lock().await;
+        model.set_content_loading(true).await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.get_queue().await {
+                Ok((currently_playing, queue)) => {
+                    // Filter out tracks that are in the skip list
+                    let mut filtered_queue = Vec::with_capacity(queue.len());
+                    for track in queue {
+                        if !model.is_in_queue_skip_list(&track.uri).await {
+                            filtered_queue.push(track);
+                        }
+                    }
+
+                    model.set_queue(currently_playing, filtered_queue).await;
+                    // Switch to MainContent section to show queue
+                    model.set_active_section(ActiveSection::MainContent).await;
+                }
+                Err(e) => {
+                    model.set_content_loading(false).await;
+                    let error_msg = Self::format_error(&e);
+                    model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Add a track to the playback queue
+    async fn add_track_to_queue(&self, track_uri: &str) {
+        let model = self.model.lock().await;
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.add_to_queue(track_uri).await {
+                Ok(()) => {
+                    tracing::info!(track_uri, "Track added to queue");
+                    // Show a brief confirmation (could be a toast notification)
                 }
                 Err(e) => {
                     let error_msg = Self::format_error(&e);
@@ -1189,7 +1278,8 @@ impl AppController {
                     // Try to restart the local backend
                     if let Some(event_channel) = self.try_restart_audio_backend().await {
                         // Start listening to events from the new backend
-                        self.start_player_event_listener(event_channel);
+                        let audio_backend = self.audio_backend.clone();
+                        self.start_player_event_listener(event_channel, audio_backend);
 
                         // Wait a bit more for stability
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1214,7 +1304,11 @@ impl AppController {
     }
 
     /// Start listening to librespot player events for real-time playback updates
-    pub fn start_player_event_listener(&self, mut event_channel: PlayerEventChannel) {
+    pub fn start_player_event_listener(
+        &self,
+        mut event_channel: PlayerEventChannel,
+        audio_backend: Arc<Mutex<Option<AudioBackend>>>,
+    ) {
         let model = self.model.clone();
         info!("Starting librespot player event listener");
 
@@ -1270,6 +1364,29 @@ impl AppController {
 
                         // Build URI from track_id - to_uri() returns the full "spotify:track:xxx" format
                         let uri = audio_item.track_id.to_uri().unwrap_or_default();
+
+                        // Check if this track is in the skip list
+                        if model_guard.is_in_queue_skip_list(&uri).await {
+                            info!(
+                                track = %audio_item.name,
+                                uri = %uri,
+                                "Track is in skip list, auto-skipping"
+                            );
+                            // Remove from skip list (we're skipping it now)
+                            model_guard.remove_from_queue_skip_list(&uri).await;
+
+                            // Drop model guard before calling skip to avoid deadlock
+                            drop(model_guard);
+
+                            // Trigger skip to next track
+                            let backend_guard = audio_backend.lock().await;
+                            if let Some(backend) = backend_guard.as_ref() {
+                                if let Err(e) = backend.skip_to_next().await {
+                                    error!(error = %e, "Failed to auto-skip track");
+                                }
+                            }
+                            continue; // Don't update track info since we're skipping
+                        }
 
                         info!(
                             track = %audio_item.name,

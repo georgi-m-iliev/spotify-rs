@@ -418,6 +418,12 @@ pub enum ContentView {
         tracks: Vec<SearchTrack>,
         selected_index: usize,
     },
+    /// Queue view - shows currently playing and upcoming tracks
+    Queue {
+        currently_playing: Option<SearchTrack>,
+        queue: Vec<SearchTrack>,
+        selected_index: usize,
+    },
 }
 
 /// Which section within artist detail is selected
@@ -1046,6 +1052,74 @@ impl SpotifyClient {
         Ok(())
     }
 
+    /// Get the current playback queue
+    pub async fn get_queue(&self) -> Result<(Option<SearchTrack>, Vec<SearchTrack>)> {
+        use rspotify::prelude::Id;
+
+        let queue_result = self.client.current_user_queue().await?;
+
+        // Convert currently playing track
+        let currently_playing = if let Some(item) = queue_result.currently_playing {
+            match item {
+                PlayableItem::Track(track) => {
+                    let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                    if !track_id.is_empty() {
+                        Some(SearchTrack {
+                            id: track_id.clone(),
+                            uri: format!("spotify:track:{}", track_id),
+                            name: track.name.clone(),
+                            artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                            album: track.album.name.clone(),
+                            duration_ms: track.duration.num_milliseconds() as u32,
+                            liked: self.liked_songs_cache.is_liked(&track_id).await,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None, // Skip episodes
+            }
+        } else {
+            None
+        };
+
+        // Convert queue tracks
+        let mut queue_tracks = Vec::new();
+        for item in queue_result.queue {
+            if let PlayableItem::Track(track) = item {
+                let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                if !track_id.is_empty() {
+                    queue_tracks.push(SearchTrack {
+                        id: track_id.clone(),
+                        uri: format!("spotify:track:{}", track_id),
+                        name: track.name.clone(),
+                        artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                        album: track.album.name.clone(),
+                        duration_ms: track.duration.num_milliseconds() as u32,
+                        liked: self.liked_songs_cache.is_liked(&track_id).await,
+                    });
+                }
+            }
+        }
+
+        Ok((currently_playing, queue_tracks))
+    }
+
+    /// Add a track to the queue
+    pub async fn add_to_queue(&self, track_uri: &str) -> Result<()> {
+        use rspotify::prelude::Id;
+
+        // Extract track ID from URI
+        let track_id = track_uri.split(':').last().unwrap_or(track_uri);
+        let id = TrackId::from_id(track_id)?;
+        let device_id = self.get_device_id().await;
+
+        self.client.add_item_to_queue(PlayableId::Track(id), device_id.as_deref()).await?;
+
+        info!(track_uri, "Added track to queue");
+        Ok(())
+    }
+
     /// Get current user's playlists
     pub async fn get_user_playlists(&self, limit: u32) -> Result<Vec<PlaylistItem>> {
         use futures::TryStreamExt;
@@ -1340,6 +1414,8 @@ pub struct AppModel {
     pub ui_state: Arc<Mutex<UiState>>,
     pub content_state: Arc<Mutex<ContentState>>,
     pub should_quit: Arc<Mutex<bool>>,
+    /// URIs of tracks to auto-skip when they start playing (simulates queue removal)
+    queue_skip_list: Arc<RwLock<HashSet<String>>>,
 }
 
 impl AppModel {
@@ -1352,6 +1428,7 @@ impl AppModel {
             ui_state: Arc::new(Mutex::new(UiState::default())),
             content_state: Arc::new(Mutex::new(ContentState::default())),
             should_quit: Arc::new(Mutex::new(false)),
+            queue_skip_list: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -1480,6 +1557,11 @@ impl AppModel {
     pub async fn cycle_section_backward(&self) {
         let mut state = self.ui_state.lock().await;
         state.active_section = state.active_section.prev();
+    }
+
+    pub async fn set_active_section(&self, section: ActiveSection) {
+        let mut state = self.ui_state.lock().await;
+        state.active_section = section;
     }
 
     pub async fn move_selection_up(&self) {
@@ -1720,6 +1802,87 @@ impl AppModel {
         state.is_loading = false;
     }
 
+    pub async fn set_queue(&self, currently_playing: Option<SearchTrack>, queue: Vec<SearchTrack>) {
+        let mut state = self.content_state.lock().await;
+        // Save current view to navigation stack before showing queue
+        if !matches!(state.view, ContentView::Empty | ContentView::Queue { .. }) {
+            let previous_view = state.view.clone();
+            state.navigation_stack.push(previous_view);
+        }
+        state.view = ContentView::Queue {
+            currently_playing,
+            queue,
+            selected_index: 0,
+        };
+        state.is_loading = false;
+    }
+
+    /// Remove a track from the queue view (locally - API doesn't support removing from queue)
+    /// Returns the track URI if removal was successful
+    pub async fn remove_from_queue_view(&self, index: usize) -> Option<String> {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::Queue { queue, selected_index, .. } = &mut state.view {
+            if index < queue.len() {
+                let removed = queue.remove(index);
+                // Adjust selected index if needed
+                if *selected_index >= queue.len() && !queue.is_empty() {
+                    *selected_index = queue.len() - 1;
+                }
+                return Some(removed.uri);
+            }
+        }
+        None
+    }
+
+    // === Queue Skip List Methods ===
+    // These implement "virtual" queue removal by auto-skipping tracks
+
+    /// Add a track URI to the skip list (will be auto-skipped when it starts playing)
+    pub async fn add_to_queue_skip_list(&self, uri: String) {
+        let mut skip_list = self.queue_skip_list.write().await;
+        debug!(uri = %uri, "Adding track to queue skip list");
+        skip_list.insert(uri);
+    }
+
+    /// Check if a track URI is in the skip list
+    pub async fn is_in_queue_skip_list(&self, uri: &str) -> bool {
+        let skip_list = self.queue_skip_list.read().await;
+        skip_list.contains(uri)
+    }
+
+    /// Remove a track URI from the skip list (e.g., if user changes their mind)
+    pub async fn remove_from_queue_skip_list(&self, uri: &str) {
+        let mut skip_list = self.queue_skip_list.write().await;
+        skip_list.remove(uri);
+    }
+
+    /// Clear the entire skip list (called when user plays new content)
+    pub async fn clear_queue_skip_list(&self) {
+        let mut skip_list = self.queue_skip_list.write().await;
+        if !skip_list.is_empty() {
+            debug!(count = skip_list.len(), "Clearing queue skip list");
+            skip_list.clear();
+        }
+    }
+
+    /// Get the number of tracks in the skip list
+    pub async fn queue_skip_list_count(&self) -> usize {
+        let skip_list = self.queue_skip_list.read().await;
+        skip_list.len()
+    }
+
+    /// Mark a track in the queue view as skipped (for UI display)
+    pub async fn mark_queue_track_as_skipped(&self, uri: &str) {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::Queue { queue, .. } = &mut state.view {
+            // We'll use a special marker - for now, we remove it from the view
+            // to match user expectations (they "deleted" it)
+            if let Some(pos) = queue.iter().position(|t| t.uri == uri) {
+                queue.remove(pos);
+            }
+        }
+    }
+
     pub async fn set_content_loading(&self, loading: bool) {
         let mut state = self.content_state.lock().await;
         state.is_loading = loading;
@@ -1823,6 +1986,12 @@ impl AppModel {
                     *selected_index -= 1;
                 }
             }
+            ContentView::Queue { queue, selected_index, .. } => {
+                if *selected_index > 0 {
+                    *selected_index -= 1;
+                }
+                let _ = queue; // silence unused warning
+            }
             ContentView::Empty => {}
         }
     }
@@ -1890,6 +2059,11 @@ impl AppModel {
             }
             ContentView::FollowedArtists { artists, selected_index } => {
                 if *selected_index < artists.len().saturating_sub(1) {
+                    *selected_index += 1;
+                }
+            }
+            ContentView::Queue { queue, selected_index, .. } => {
+                if *selected_index < queue.len().saturating_sub(1) {
                     *selected_index += 1;
                 }
             }
@@ -1991,6 +2165,12 @@ impl AppModel {
                     name: a.name.clone(),
                 })
             }
+            ContentView::Queue { queue, selected_index, .. } => {
+                queue.get(*selected_index).map(|t| SelectedItem::Track {
+                    uri: t.uri.clone(),
+                    name: t.name.clone(),
+                })
+            }
             ContentView::Empty => None,
         }
     }
@@ -2065,6 +2245,9 @@ impl AppModel {
             ContentView::RecentlyPlayed { tracks, selected_index } => {
                 tracks.get(*selected_index).map(|t| (t.id.clone(), t.liked))
             }
+            ContentView::Queue { queue, selected_index, .. } => {
+                queue.get(*selected_index).map(|t| (t.id.clone(), t.liked))
+            }
             _ => None,
         };
 
@@ -2109,7 +2292,74 @@ impl AppModel {
                     track.liked = liked;
                 }
             }
+            ContentView::Queue { queue, currently_playing, .. } => {
+                if let Some(track) = queue.iter_mut().find(|t| t.id == track_id) {
+                    track.liked = liked;
+                }
+                if let Some(cp) = currently_playing {
+                    if cp.id == track_id {
+                        cp.liked = liked;
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Get the selected track URI in the queue for removal
+    pub async fn get_selected_queue_track_uri(&self) -> Option<String> {
+        let state = self.content_state.lock().await;
+        if let ContentView::Queue { queue, selected_index, .. } = &state.view {
+            queue.get(*selected_index).map(|t| t.uri.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Get the selected queue index
+    pub async fn get_selected_queue_index(&self) -> Option<usize> {
+        let state = self.content_state.lock().await;
+        if let ContentView::Queue { selected_index, .. } = &state.view {
+            Some(*selected_index)
+        } else {
+            None
+        }
+    }
+
+    /// Get the currently selected track URI (for adding to queue)
+    pub async fn get_selected_track_uri(&self) -> Option<String> {
+        let state = self.content_state.lock().await;
+        match &state.view {
+            ContentView::SearchResults { results, section, track_index, .. } => {
+                if *section == SearchResultSection::Tracks {
+                    results.tracks.get(*track_index).map(|t| t.uri.clone())
+                } else {
+                    None
+                }
+            }
+            ContentView::AlbumDetail { detail, selected_index } => {
+                detail.tracks.get(*selected_index).map(|t| t.uri.clone())
+            }
+            ContentView::PlaylistDetail { detail, selected_index } => {
+                detail.tracks.get(*selected_index).map(|t| t.uri.clone())
+            }
+            ContentView::ArtistDetail { detail, section, track_index, .. } => {
+                if *section == ArtistDetailSection::TopTracks {
+                    detail.top_tracks.get(*track_index).map(|t| t.uri.clone())
+                } else {
+                    None
+                }
+            }
+            ContentView::LikedSongs { tracks, selected_index } => {
+                tracks.get(*selected_index).map(|t| t.uri.clone())
+            }
+            ContentView::RecentlyPlayed { tracks, selected_index } => {
+                tracks.get(*selected_index).map(|t| t.uri.clone())
+            }
+            ContentView::Queue { queue, selected_index, .. } => {
+                queue.get(*selected_index).map(|t| t.uri.clone())
+            }
+            _ => None,
         }
     }
 }
