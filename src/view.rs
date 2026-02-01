@@ -427,7 +427,7 @@ impl AppView {
         let content_width = chunks[1].width.saturating_sub(4) as usize;
 
         // Calculate column widths dynamically for tracks
-        let num_width = 3;
+        let num_width = 4; // Support up to 3-digit numbers (999)
         let liked_width = 2;
         let duration_width = 8;
         let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
@@ -443,7 +443,7 @@ impl AppView {
                     ListItem::new(format!(
                         " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
                         "#", "  ", "Title", "Artist", "Duration",
-                        num_width = num_width - 1,
+                        num_width = num_width,
                         title_width = title_width,
                         artist_width = artist_width
                     ))
@@ -466,16 +466,18 @@ impl AppView {
 
                     let liked_indicator = if track.liked { "💚" } else { "  " };
                     let playing_indicator = if is_playing { "▶" } else { " " };
-                    let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+                    let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
-                    let title_str = if track.name.len() > title_width {
-                        format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                    let title_str = if track.name.chars().count() > title_width {
+                        let truncated: String = track.name.chars().take(title_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = title_width)
                     } else {
                         format!("{:<width$}", track.name, width = title_width)
                     };
 
-                    let artist_str = if track.artist.len() > artist_width {
-                        format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                    let artist_str = if track.artist.chars().count() > artist_width {
+                        let truncated: String = track.artist.chars().take(artist_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = artist_width)
                     } else {
                         format!("{:<width$}", track.artist, width = artist_width)
                     };
@@ -735,7 +737,7 @@ impl AppView {
 
         // Calculate available width for content
         let content_width = chunks[1].width.saturating_sub(4) as usize;
-        let num_width = 3;
+        let num_width = 4; // Support up to 3-digit numbers (999)
         let liked_width = 2;
         let duration_width = 8;
         let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
@@ -748,7 +750,7 @@ impl AppView {
             ListItem::new(format!(
                 " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
                 "#", "  ", "Title", "Artist", "Duration",
-                num_width = num_width - 1,
+                num_width = num_width,
                 title_width = title_width,
                 artist_width = artist_width
             ))
@@ -775,7 +777,7 @@ impl AppView {
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
                 let playing_indicator = if is_playing { "▶" } else { " " };
-                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
                 let title_str = if track.name.len() > title_width {
                     format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
@@ -845,7 +847,7 @@ impl AppView {
 
         // Calculate available width for content
         let content_width = chunks[1].width.saturating_sub(4) as usize;
-        let num_width = 3;
+        let num_width = 4; // Support up to 3-digit numbers (999)
         let liked_width = 2;
         let duration_width = 8;
         let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
@@ -858,7 +860,7 @@ impl AppView {
             ListItem::new(format!(
                 " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
                 "#", "  ", "Title", "Artist", "Duration",
-                num_width = num_width - 1,
+                num_width = num_width,
                 title_width = title_width,
                 artist_width = artist_width
             ))
@@ -885,16 +887,18 @@ impl AppView {
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
                 let playing_indicator = if is_playing { "▶" } else { " " };
-                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
-                let title_str = if track.name.len() > title_width {
-                    format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                let title_str = if track.name.chars().count() > title_width {
+                    let truncated: String = track.name.chars().take(title_width.saturating_sub(3)).collect();
+                    format!("{:<width$}", format!("{}...", truncated), width = title_width)
                 } else {
                     format!("{:<width$}", track.name, width = title_width)
                 };
 
-                let artist_str = if track.artist.len() > artist_width {
-                    format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                let artist_str = if track.artist.chars().count() > artist_width {
+                    let truncated: String = track.artist.chars().take(artist_width.saturating_sub(3)).collect();
+                    format!("{:<width$}", format!("{}...", truncated), width = artist_width)
                 } else {
                     format!("{:<width$}", track.artist, width = artist_width)
                 };
@@ -977,7 +981,7 @@ impl AppView {
 
         // Calculate available width for track content
         let track_content_width = content_chunks[0].width.saturating_sub(4) as usize;
-        let num_width = 3;
+        let num_width = 4; // Support up to 3-digit numbers
         let liked_width = 2;
         let duration_width = 8;
         let fixed_track_width = num_width + 3 + liked_width + 3 + 3 + duration_width;
@@ -988,7 +992,7 @@ impl AppView {
             ListItem::new(format!(
                 " {:<num_width$}   {}   {:<title_width_artist$}   {}",
                 "#", "  ", "Title", "Duration",
-                num_width = num_width - 1,
+                num_width = num_width,
                 title_width_artist = title_width_artist
             ))
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -1014,10 +1018,11 @@ impl AppView {
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
                 let playing_indicator = if is_playing { "▶" } else { " " };
-                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
-                let title_str = if track.name.len() > title_width_artist {
-                    format!("{:.width$}...", track.name, width = title_width_artist.saturating_sub(3))
+                let title_str = if track.name.chars().count() > title_width_artist {
+                    let truncated: String = track.name.chars().take(title_width_artist.saturating_sub(3)).collect();
+                    format!("{:<width$}", format!("{}...", truncated), width = title_width_artist)
                 } else {
                     format!("{:<width$}", track.name, width = title_width_artist)
                 };
@@ -1376,8 +1381,8 @@ impl AppView {
         let content_width = area.width.saturating_sub(4) as usize; // 2 for borders, 2 for padding
 
         // Calculate column widths dynamically based on available space
-        // Format: "#(3) [SPACE](3) LIKED(2) [SPACE](3) TITLE [SPACE](3) ARTIST [SPACE](3) DURATION(8)"
-        let num_width = 3;
+        // Format: "#(4) [SPACE](3) LIKED(2) [SPACE](3) TITLE [SPACE](3) ARTIST [SPACE](3) DURATION(8)"
+        let num_width = 4; // Support up to 3-digit numbers (999)
         let liked_width = 2;
         let duration_width = 8;
         let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width; // Total fixed + spaces
@@ -1391,7 +1396,7 @@ impl AppView {
             ListItem::new(format!(
                 " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
                 "#", "  ", "Title", "Artist", "Duration",
-                num_width = num_width - 1,
+                num_width = num_width,
                 title_width = title_width,
                 artist_width = artist_width
             ))
@@ -1417,16 +1422,18 @@ impl AppView {
 
                 let liked_indicator = if track.liked { "💚" } else { "  " };
                 let playing_indicator = if is_playing { "▶" } else { " " };
-                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+                let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
-                let title_str = if track.name.len() > title_width {
-                    format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                let title_str = if track.name.chars().count() > title_width {
+                    let truncated: String = track.name.chars().take(title_width.saturating_sub(3)).collect();
+                    format!("{:<width$}", format!("{}...", truncated), width = title_width)
                 } else {
                     format!("{:<width$}", track.name, width = title_width)
                 };
 
-                let artist_str = if track.artist.len() > artist_width {
-                    format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                let artist_str = if track.artist.chars().count() > artist_width {
+                    let truncated: String = track.artist.chars().take(artist_width.saturating_sub(3)).collect();
+                    format!("{:<width$}", format!("{}...", truncated), width = artist_width)
                 } else {
                     format!("{:<width$}", track.artist, width = artist_width)
                 };
@@ -1597,7 +1604,7 @@ impl AppView {
 
         // Queue section
         let content_width = chunks[1].width.saturating_sub(4) as usize;
-        let num_width = 3;
+        let num_width = 4; // Support up to 3-digit numbers
         let liked_width = 2;
         let duration_width = 8;
         let fixed_width = num_width + 3 + liked_width + 3 + 3 + 3 + duration_width;
@@ -1610,7 +1617,7 @@ impl AppView {
             ListItem::new(format!(
                 " {:<num_width$}   {}   {:<title_width$}   {:<artist_width$}   {}",
                 "#", "  ", "Title", "Artist", "Duration",
-                num_width = num_width - 1,
+                num_width = num_width,
                 title_width = title_width,
                 artist_width = artist_width
             ))
@@ -1642,16 +1649,18 @@ impl AppView {
 
                     let liked_indicator = if track.liked { "💚" } else { "  " };
                     let playing_indicator = if is_playing { "▶" } else { " " };
-                    let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width - 1);
+                    let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
-                    let title_str = if track.name.len() > title_width {
-                        format!("{:.width$}...", track.name, width = title_width.saturating_sub(3))
+                    let title_str = if track.name.chars().count() > title_width {
+                        let truncated: String = track.name.chars().take(title_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = title_width)
                     } else {
                         format!("{:<width$}", track.name, width = title_width)
                     };
 
-                    let artist_str = if track.artist.len() > artist_width {
-                        format!("{:.width$}...", track.artist, width = artist_width.saturating_sub(3))
+                    let artist_str = if track.artist.chars().count() > artist_width {
+                        let truncated: String = track.artist.chars().take(artist_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = artist_width)
                     } else {
                         format!("{:<width$}", track.artist, width = artist_width)
                     };
