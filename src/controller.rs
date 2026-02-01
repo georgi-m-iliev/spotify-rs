@@ -54,7 +54,18 @@ impl AppController {
 
         let model = self.model.lock().await;
 
-        // Handle device picker modal first (highest priority)
+        // Handle help popup first (highest priority)
+        if model.is_help_popup_open().await {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('H') => {
+                    model.hide_help_popup().await;
+                    Ok(())
+                }
+                _ => Ok(()), // Ignore all other keys when help is open
+            }
+        }
+
+        // Handle device picker modal (high priority)
         if model.is_device_picker_open().await {
             return match key.code {
                 KeyCode::Up => {
@@ -287,6 +298,10 @@ impl AppController {
                 // Show queue
                 drop(model);
                 self.show_queue().await;
+            }
+            KeyCode::Char('h') | KeyCode::Char('H') => {
+                // Show help popup
+                model.show_help_popup().await;
             }
             _ => {}
         }

@@ -48,6 +48,11 @@ impl AppView {
         if ui_state.show_device_picker {
             Self::render_device_picker(frame, ui_state);
         }
+
+        // Help popup overlay (if open)
+        if ui_state.show_help_popup {
+            Self::render_help_popup(frame);
+        }
     }
 
     /// Helper to render a scrollable list with proper state management
@@ -1128,6 +1133,96 @@ impl AppView {
         list_state.select(Some(ui_state.device_selected));
 
         frame.render_stateful_widget(list, popup_area, &mut list_state);
+    }
+
+    fn render_help_popup(frame: &mut Frame) {
+        let area = frame.area();
+
+        // Define keybindings organized by category
+        let keybindings = vec![
+            ("", "── Navigation ──"),
+            ("Tab / Shift+Tab", "Cycle sections"),
+            ("↑ / ↓", "Move selection"),
+            ("← / →", "Switch search category"),
+            ("Enter", "Select / Play"),
+            ("Backspace / Esc", "Go back"),
+            ("G", "Focus search"),
+            ("L", "Focus playlists"),
+            ("", ""),
+            ("", "── Playback ──"),
+            ("Space", "Play / Pause"),
+            ("N", "Next track"),
+            ("P", "Previous track"),
+            ("S", "Toggle shuffle"),
+            ("R", "Cycle repeat (off → all → one)"),
+            ("+ / -", "Volume up / down"),
+            ("", ""),
+            ("", "── Actions ──"),
+            ("X", "Like / Unlike track"),
+            ("K", "Add to queue"),
+            ("Delete", "Remove from queue"),
+            ("U", "Show queue"),
+            ("D", "Device picker"),
+            ("", ""),
+            ("", "── General ──"),
+            ("H", "Toggle this help"),
+            ("Q", "Quit"),
+        ];
+
+        let popup_width = 62;
+        let popup_height = (keybindings.len() as u16 + 2).min(area.height - 4);
+
+        let popup_x = area.width.saturating_sub(popup_width) / 2;
+        let popup_y = area.height.saturating_sub(popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        // Clear the area behind the popup
+        frame.render_widget(Clear, popup_area);
+
+        // Create help text lines
+        let lines: Vec<Line> = keybindings
+            .iter()
+            .map(|(key, desc)| {
+                if key.is_empty() {
+                    // Section header or empty line
+                    Line::from(Span::styled(
+                        format!("{:^38}", desc),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ))
+                } else {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{:>18}", key),
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(
+                            desc.to_string(),
+                            Style::default().fg(Color::White),
+                        ),
+                    ])
+                }
+            })
+            .collect();
+
+        let help_text = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Help (H or Esc to close) ")
+                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                    .style(Style::default().bg(Color::Black)),
+            )
+            .style(Style::default().bg(Color::Black));
+
+        frame.render_widget(help_text, popup_area);
     }
 
 

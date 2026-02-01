@@ -153,6 +153,8 @@ pub struct UiState {
     pub show_device_picker: bool,
     pub available_devices: Vec<DeviceInfo>,
     pub device_selected: usize,
+    // Help popup state
+    pub show_help_popup: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,6 +183,7 @@ impl Default for UiState {
             show_device_picker: false,
             available_devices: vec![],
             device_selected: 0,
+            show_help_popup: false,
         }
     }
 }
@@ -1675,6 +1678,25 @@ impl AppModel {
             state.device_selected += 1;
         }
     }
+
+    // ========================================================================
+    // Help Popup Management
+    // ========================================================================
+
+    pub async fn show_help_popup(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.show_help_popup = true;
+    }
+
+    pub async fn hide_help_popup(&self) {
+        let mut state = self.ui_state.lock().await;
+        state.show_help_popup = false;
+    }
+
+    pub async fn is_help_popup_open(&self) -> bool {
+        self.ui_state.lock().await.show_help_popup
+    }
+
 
     pub async fn get_selected_device(&self) -> Option<DeviceInfo> {
         let state = self.ui_state.lock().await;
