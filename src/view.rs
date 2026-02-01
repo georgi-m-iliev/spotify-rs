@@ -1154,14 +1154,14 @@ impl AppView {
             let area = frame.area();
 
             // Fixed width popup (responsive to screen size)
-            let popup_width = 50.min(area.width.saturating_sub(4));
+            let popup_width = 52.min(area.width.saturating_sub(4));
             let inner_width = popup_width.saturating_sub(4) as usize; // account for borders
 
             // Calculate how many lines the error message will take when wrapped
-            let error_line_count = ((error_msg.len() as f32) / (inner_width as f32)).ceil() as u16;
+            let error_line_count = ((error_msg.chars().count() as f32) / (inner_width as f32)).ceil() as u16;
 
-            // Height: top border (1) + error lines + empty line + hint (1) + bottom border (1)
-            let popup_height = 3 + error_line_count.max(1);
+            // Height: top border (1) + error lines + bottom border (1)
+            let popup_height = (2 + error_line_count.max(1)).min(area.height - 4);
 
             let popup_x = area.width.saturating_sub(popup_width) / 2;
             let popup_y = area.height.saturating_sub(popup_height) / 2;
@@ -1177,7 +1177,6 @@ impl AppView {
             frame.render_widget(Clear, popup_area);
 
             // Create text with error message and dismiss hint
-
             let error_widget = Paragraph::new(error_msg.to_string())
                 .style(Style::default().fg(Color::Red))
                 .wrap(ratatui::widgets::Wrap { trim: false })
@@ -1185,7 +1184,7 @@ impl AppView {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Red))
-                        .title(" ⚠️  Error ")
+                        .title(" Error (Esc to dismiss) ")
                         .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
                         .style(Style::default().bg(Color::Black)),
                 );

@@ -1633,6 +1633,10 @@ impl AppModel {
         state.error_timestamp = None;
     }
 
+    pub async fn has_error(&self) -> bool {
+        self.ui_state.lock().await.error_message.is_some()
+    }
+
     pub async fn auto_clear_old_errors(&self) {
         let mut state = self.ui_state.lock().await;
         if let Some(timestamp) = state.error_timestamp {

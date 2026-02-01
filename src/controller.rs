@@ -54,7 +54,18 @@ impl AppController {
 
         let model = self.model.lock().await;
 
-        // Handle help popup first (highest priority)
+        // Handle error message first (highest priority - blocks all other interactions)
+        if model.has_error().await {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    model.clear_error().await;
+                    Ok(())
+                }
+                _ => Ok(()), // Ignore all other keys when error is displayed
+            }
+        }
+
+        // Handle help popup (high priority)
         if model.is_help_popup_open().await {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('H') => {
