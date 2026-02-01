@@ -597,6 +597,12 @@ impl AppController {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
+            // Check if there's an active device first
+            if !spotify.has_active_device().await {
+                model.set_error("No active playback. Start playing a song first.".to_string()).await;
+                return;
+            }
+
             let current_shuffle = model.get_shuffle_state().await;
             let new_shuffle = !current_shuffle;
 
@@ -606,6 +612,11 @@ impl AppController {
             } else {
                 // Update local state
                 model.set_shuffle(new_shuffle).await;
+                // Refresh queue if visible (shuffle affects queue order)
+                // Add a delay to allow Spotify API to update the queue order
+                drop(model);
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                self.refresh_queue_if_visible().await;
             }
         }
     }
@@ -614,6 +625,12 @@ impl AppController {
         let model = self.model.lock().await;
 
         if let Some(spotify) = &model.spotify {
+            // Check if there's an active device first
+            if !spotify.has_active_device().await {
+                model.set_error("No active playback. Start playing a song first.".to_string()).await;
+                return;
+            }
+
             let current_repeat = model.get_repeat_state().await;
             let new_repeat = match current_repeat {
                 crate::model::RepeatState::Off => crate::model::RepeatState::All,
@@ -720,6 +737,36 @@ impl AppController {
                     model.set_content_loading(false).await;
                     let error_msg = Self::format_error(&e);
                     model.set_error(error_msg).await;
+                }
+            }
+        }
+    }
+
+    /// Refresh the queue if the queue view is currently visible
+    /// This is called when track changes or shuffle is toggled
+    pub async fn refresh_queue_if_visible(&self) {
+        let model = self.model.lock().await;
+
+        // Only refresh if queue view is visible
+        if !model.is_queue_view_visible().await {
+            return;
+        }
+
+        if let Some(spotify) = &model.spotify {
+            match spotify.get_queue().await {
+                Ok((currently_playing, queue)) => {
+                    // Filter out tracks that are in the skip list
+                    let mut filtered_queue = Vec::with_capacity(queue.len());
+                    for track in queue {
+                        if !model.is_in_queue_skip_list(&track.uri).await {
+                            filtered_queue.push(track);
+                        }
+                    }
+
+                    model.update_queue_if_visible(currently_playing, filtered_queue).await;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "Failed to refresh queue");
                 }
             }
         }
@@ -1288,6 +1335,7 @@ impl AppController {
         audio_backend: Arc<Mutex<Option<AudioBackend>>>,
     ) {
         let model = self.model.clone();
+        let controller = self.clone();
         tracing::info!("Starting librespot player event listener");
 
         tokio::spawn(async move {
@@ -1383,6 +1431,11 @@ impl AppController {
                             uri,
                         };
                         model_guard.update_track_info(track).await;
+
+                        // Refresh queue if visible (track changed = queue moved forward)
+                        drop(model_guard);
+                        controller.refresh_queue_if_visible().await;
+                        continue; // Skip the drop at end since we already dropped
                     }
                     PlayerEvent::Stopped { .. } => {
                         tracing::debug!("PlayerEvent::Stopped");

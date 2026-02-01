@@ -1837,6 +1837,28 @@ impl AppModel {
         state.is_loading = false;
     }
 
+    /// Check if the queue view is currently visible
+    pub async fn is_queue_view_visible(&self) -> bool {
+        let state = self.content_state.lock().await;
+        matches!(state.view, ContentView::Queue { .. })
+    }
+
+    /// Update the queue contents if the queue view is currently visible
+    /// This preserves the current selection position
+    pub async fn update_queue_if_visible(&self, currently_playing: Option<SearchTrack>, queue: Vec<SearchTrack>) {
+        let mut state = self.content_state.lock().await;
+        if let ContentView::Queue { selected_index, .. } = &state.view {
+            let current_index = *selected_index;
+            // Preserve selection but clamp to new queue size
+            let new_index = current_index.min(queue.len().saturating_sub(1));
+            state.view = ContentView::Queue {
+                currently_playing,
+                queue,
+                selected_index: new_index,
+            };
+        }
+    }
+
     /// Remove a track from the queue view (locally - API doesn't support removing from queue)
     /// Returns the track URI if removal was successful
     pub async fn remove_from_queue_view(&self, index: usize) -> Option<String> {
