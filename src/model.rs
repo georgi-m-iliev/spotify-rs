@@ -442,14 +442,74 @@ pub struct SpotifyClient {
     client: Arc<AuthCodeSpotify>,
     local_device_name: Option<String>,
     liked_songs_cache: LikedSongsCache,
+    refresh_token: Arc<RwLock<String>>,
+    token_expires_at: Arc<RwLock<Option<chrono::DateTime<chrono::Utc>>>>,
 }
 
 impl SpotifyClient {
-    pub fn new(client: AuthCodeSpotify, local_device_name: Option<String>) -> Self {
+    pub fn new(client: AuthCodeSpotify, local_device_name: Option<String>, refresh_token: String, expires_at: Option<chrono::DateTime<chrono::Utc>>) -> Self {
         Self {
             client: Arc::new(client),
             local_device_name,
             liked_songs_cache: LikedSongsCache::new(),
+            refresh_token: Arc::new(RwLock::new(refresh_token)),
+            token_expires_at: Arc::new(RwLock::new(expires_at)),
+        }
+    }
+
+    /// Check if the token needs refresh (less than 5 minutes remaining)
+    pub async fn token_needs_refresh(&self) -> bool {
+        let expires_at = self.token_expires_at.read().await;
+        if let Some(exp) = *expires_at {
+            let now = chrono::Utc::now();
+            let remaining = exp - now;
+            // Refresh if less than 5 minutes remaining
+            remaining.num_seconds() < 300
+        } else {
+            false
+        }
+    }
+
+    /// Refresh the access token if needed
+    pub async fn refresh_token_if_needed(&self) -> Result<bool> {
+        if !self.token_needs_refresh().await {
+            return Ok(false);
+        }
+
+        let refresh_token = self.refresh_token.read().await.clone();
+
+        tracing::info!("Token expiring soon, refreshing...");
+
+        match crate::auth::refresh_access_token(&refresh_token).await {
+            Ok((new_access_token, new_refresh_token, new_expires_at)) => {
+                // Update the client's token
+                use rspotify::Token;
+                use std::collections::HashSet;
+
+                let new_token = Token {
+                    access_token: new_access_token,
+                    expires_in: chrono::Duration::seconds(3600),
+                    expires_at: Some(new_expires_at),
+                    scopes: crate::auth::SCOPES
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect::<HashSet<String>>(),
+                    refresh_token: None,
+                };
+
+                *self.client.token.lock().await.unwrap() = Some(new_token);
+
+                // Update stored refresh token and expiry
+                *self.refresh_token.write().await = new_refresh_token;
+                *self.token_expires_at.write().await = Some(new_expires_at);
+
+                tracing::info!("Token refreshed successfully");
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to refresh token");
+                Err(e)
+            }
         }
     }
 
@@ -1363,6 +1423,11 @@ impl AppModel {
 
     pub fn set_spotify_client(&mut self, client: SpotifyClient) {
         self.spotify = Some(client);
+    }
+
+    /// Get a clone of the spotify client (for token refresh operations)
+    pub async fn get_spotify_client(&self) -> Option<SpotifyClient> {
+        self.spotify.clone()
     }
 
     pub async fn update_device_name(&self, name: String) {

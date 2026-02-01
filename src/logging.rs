@@ -1,8 +1,3 @@
-//! File-based logging module for Spotify-RS
-//!
-//! This module sets up tracing-based logging that writes to a file instead of stdout,
-//! since the application uses a TUI that occupies the terminal.
-
 use std::path::Path;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{

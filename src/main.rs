@@ -49,7 +49,13 @@ async fn main() -> Result<()> {
 
     // Create the SpotifyClient with our local device name for reference
     let local_device_name = AudioBackend::get_device_name().to_string();
-    let spotify_client = SpotifyClient::new(rspotify_client, Some(local_device_name.clone()));
+    let token_expires_at = auth_result.rspotify_token.expires_at;
+    let spotify_client = SpotifyClient::new(
+        rspotify_client,
+        Some(local_device_name.clone()),
+        auth_result.refresh_token.clone(),
+        token_expires_at,
+    );
 
     // Initialize liked songs cache from disk
     let cache_loaded = spotify_client.init_liked_songs_cache().await.is_ok();
@@ -170,7 +176,30 @@ async fn run_app(
     model: Arc<Mutex<AppModel>>,
     controller: AppController,
 ) -> io::Result<()> {
+    // Track when we last checked the token
+    let mut last_token_check = std::time::Instant::now();
+    const TOKEN_CHECK_INTERVAL: Duration = Duration::from_secs(60); // Check every minute
+
     loop {
+        // Periodically check and refresh token if needed
+        if last_token_check.elapsed() >= TOKEN_CHECK_INTERVAL {
+            last_token_check = std::time::Instant::now();
+
+            let model_guard = model.lock().await;
+            if let Some(spotify) = model_guard.get_spotify_client().await {
+                drop(model_guard);
+                // Spawn token refresh in background so it doesn't block UI
+                tokio::spawn(async move {
+                    match spotify.refresh_token_if_needed().await {
+                        Ok(_) => {},
+                        Err(e) => tracing::warn!("Token refresh check failed: {}", e),
+                    }
+                });
+            } else {
+                drop(model_guard);
+            }
+        }
+
         // Get current state
         let (playback, ui_state, content_state, should_quit) = {
             let model_guard = model.lock().await;

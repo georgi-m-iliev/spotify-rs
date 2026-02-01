@@ -28,9 +28,10 @@ pub struct AuthResult {
     pub librespot_credentials: Credentials,
     pub rspotify_token: Token,
     pub cache: Cache,
+    pub refresh_token: String,
 }
 
-async fn perform_browser_auth() -> Result<(Credentials, String)> {
+async fn perform_browser_auth() -> Result<(Credentials, String, String)> {
     tracing::info!("Starting browser-based OAuth flow");
     let client = librespot_oauth::OAuthClientBuilder::new(
         SPOTIFY_CLIENT_ID,
@@ -47,14 +48,14 @@ async fn perform_browser_auth() -> Result<(Credentials, String)> {
         .await
         .expect("Failed to get token");
 
-    let refresh_token = &token.refresh_token;
+    let refresh_token = token.refresh_token.clone();
 
-    let _ = fs::write(REFRESH_TOKEN_FILE, refresh_token);
+    let _ = fs::write(REFRESH_TOKEN_FILE, &refresh_token);
     tracing::debug!("Saved refresh token to disk");
 
     let credentials = Credentials::with_access_token(token.access_token.clone());
     tracing::info!("Browser authentication completed successfully");
-    Ok((credentials, token.access_token))
+    Ok((credentials, token.access_token, refresh_token))
 }
 
 pub async fn perform_oauth_flow() -> Result<AuthResult> {
@@ -62,7 +63,7 @@ pub async fn perform_oauth_flow() -> Result<AuthResult> {
 
     let stored_refresh_token = fs::read_to_string(REFRESH_TOKEN_FILE).ok();
 
-    let (credentials, access_token) =
+    let (credentials, access_token, refresh_token) =
         if let (Some(creds), Some(refresh_token)) = (cache.credentials(), stored_refresh_token) {
             tracing::info!("Found cached Librespot credentials and refresh token");
 
@@ -75,11 +76,11 @@ pub async fn perform_oauth_flow() -> Result<AuthResult> {
 
             match oauth_client.refresh_token_async(&refresh_token).await {
                 Ok(new_token) => {
-                    let rt = &new_token.refresh_token;
-                    let _ = fs::write(REFRESH_TOKEN_FILE, rt);
+                    let new_refresh_token = new_token.refresh_token.clone();
+                    let _ = fs::write(REFRESH_TOKEN_FILE, &new_refresh_token);
                     tracing::debug!("Token refreshed successfully");
 
-                    (creds, new_token.access_token)
+                    (creds, new_token.access_token, new_refresh_token)
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Cached refresh token failed, re-authenticating");
@@ -104,5 +105,31 @@ pub async fn perform_oauth_flow() -> Result<AuthResult> {
             refresh_token: None,
         },
         cache,
+        refresh_token,
     })
 }
+
+/// Refresh the access token using the stored refresh token
+/// Returns (new_access_token, new_refresh_token, expires_at)
+pub async fn refresh_access_token(refresh_token: &str) -> Result<(String, String, chrono::DateTime<Utc>)> {
+    tracing::debug!("Refreshing access token");
+
+    let oauth_client = librespot_oauth::OAuthClientBuilder::new(
+        SPOTIFY_CLIENT_ID,
+        SPOTIFY_REDIRECT_URI,
+        SCOPES.split_whitespace().collect(),
+    )
+    .build()?;
+
+    let new_token = oauth_client.refresh_token_async(refresh_token).await?;
+
+    // Save the new refresh token to disk
+    let new_refresh_token = new_token.refresh_token.clone();
+    let _ = fs::write(REFRESH_TOKEN_FILE, &new_refresh_token);
+
+    let expires_at = Utc::now() + chrono::Duration::seconds(3600);
+    tracing::info!("Access token refreshed successfully, expires at {}", expires_at);
+
+    Ok((new_token.access_token, new_refresh_token, expires_at))
+}
+
