@@ -487,7 +487,29 @@ impl AppView {
                 items
             }
             SearchResultSection::Albums => {
-                results.albums.iter().enumerate().map(|(i, album)| {
+                // Calculate column widths for albums: # | Album | Artist | Year
+                let album_num_width = 4;
+                let year_width = 4; // Just "2024"
+                // Fixed width = leading space(1) + num + spacing(3) + spacing(3) + spacing(3) + year
+                let album_fixed_width = 1 + album_num_width + 3 + 3 + 3 + year_width;
+                let album_remaining = content_width.saturating_sub(album_fixed_width);
+                let album_name_width = (album_remaining * 50) / 100;
+                let album_artist_width = album_remaining.saturating_sub(album_name_width);
+
+                // Create header as first item
+                let mut items = vec![
+                    ListItem::new(format!(
+                        " {:<num_w$}   {:<album_w$}   {:<artist_w$}   {:>year_w$}",
+                        "#", "Album", "Artist", "Year",
+                        num_w = album_num_width,
+                        album_w = album_name_width,
+                        artist_w = album_artist_width,
+                        year_w = year_width
+                    ))
+                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                ];
+
+                let album_items: Vec<ListItem> = results.albums.iter().enumerate().map(|(i, album)| {
                     let style = if i == album_index && is_focused {
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                     } else if i == album_index {
@@ -495,11 +517,55 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(format!("{} - {} ({})", album.name, album.artist, album.year)).style(style)
-                }).collect()
+
+                    let album_str = if album.name.chars().count() > album_name_width {
+                        let truncated: String = album.name.chars().take(album_name_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = album_name_width)
+                    } else {
+                        format!("{:<width$}", album.name, width = album_name_width)
+                    };
+
+                    let artist_str = if album.artist.chars().count() > album_artist_width {
+                        let truncated: String = album.artist.chars().take(album_artist_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = album_artist_width)
+                    } else {
+                        format!("{:<width$}", album.artist, width = album_artist_width)
+                    };
+
+                    ListItem::new(format!(
+                        " {:<num_w$}   {}   {}   {:>year_w$}",
+                        i + 1, album_str, artist_str, album.year,
+                        num_w = album_num_width,
+                        year_w = year_width
+                    )).style(style)
+                }).collect();
+
+                items.extend(album_items);
+                items
             }
             SearchResultSection::Artists => {
-                results.artists.iter().enumerate().map(|(i, artist)| {
+                // Calculate column widths for artists: # | Artist | Genres
+                let artist_num_width = 4;
+                // Fixed width = leading space(1) + num + spacing(3) + spacing(3)
+                let artist_fixed_width = 1 + artist_num_width + 3 + 3;
+                let artist_remaining = content_width.saturating_sub(artist_fixed_width);
+                // Give 35% to artist name, 65% to genres
+                let artist_name_width = (artist_remaining * 35) / 100;
+                let genres_width = artist_remaining.saturating_sub(artist_name_width);
+
+                // Create header as first item
+                let mut items = vec![
+                    ListItem::new(format!(
+                        " {:<num_w$}   {:<name_w$}   {:<genres_w$}",
+                        "#", "Artist", "Genres",
+                        num_w = artist_num_width,
+                        name_w = artist_name_width,
+                        genres_w = genres_width
+                    ))
+                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                ];
+
+                let artist_items: Vec<ListItem> = results.artists.iter().enumerate().map(|(i, artist)| {
                     let style = if i == artist_index && is_focused {
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                     } else if i == artist_index {
@@ -507,16 +573,58 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    let genres = if artist.genres.is_empty() {
-                        String::new()
+
+                    let name_str = if artist.name.chars().count() > artist_name_width {
+                        let truncated: String = artist.name.chars().take(artist_name_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = artist_name_width)
                     } else {
-                        format!(" ({})", artist.genres.iter().take(2).cloned().collect::<Vec<_>>().join(", "))
+                        format!("{:<width$}", artist.name, width = artist_name_width)
                     };
-                    ListItem::new(format!("{}{}", artist.name, genres)).style(style)
-                }).collect()
+
+                    let genres_str = if artist.genres.is_empty() {
+                        format!("{:<width$}", "-", width = genres_width)
+                    } else {
+                        let genres_text = artist.genres.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                        if genres_text.chars().count() > genres_width {
+                            let truncated: String = genres_text.chars().take(genres_width.saturating_sub(3)).collect();
+                            format!("{:<width$}", format!("{}...", truncated), width = genres_width)
+                        } else {
+                            format!("{:<width$}", genres_text, width = genres_width)
+                        }
+                    };
+
+                    ListItem::new(format!(
+                        " {:<num_w$}   {}   {}",
+                        i + 1, name_str, genres_str,
+                        num_w = artist_num_width
+                    )).style(style)
+                }).collect();
+
+                items.extend(artist_items);
+                items
             }
             SearchResultSection::Playlists => {
-                results.playlists.iter().enumerate().map(|(i, playlist)| {
+                // Calculate column widths for playlists: # | Playlist | Owner | Tracks
+                let pl_num_width = 4;
+                let tracks_width = 8;
+                let owner_width = 20;
+                let pl_fixed_width = pl_num_width + 3 + 3 + owner_width + 3 + tracks_width;
+                let pl_name_width = content_width.saturating_sub(pl_fixed_width);
+
+                // Create header as first item
+                let mut items = vec![
+                    ListItem::new(format!(
+                        " {:<num_w$}   {:<name_w$}   {:<owner_w$}   {:>tracks_w$}",
+                        "#", "Playlist", "Owner", "Tracks",
+                        num_w = pl_num_width,
+                        name_w = pl_name_width,
+                        owner_w = owner_width,
+                        tracks_w = tracks_width
+                    ))
+                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                ];
+
+                let playlist_items: Vec<ListItem> = results.playlists.iter().enumerate().map(|(i, playlist)| {
                     let style = if i == playlist_index && is_focused {
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                     } else if i == playlist_index {
@@ -524,8 +632,31 @@ impl AppView {
                     } else {
                         Style::default()
                     };
-                    ListItem::new(format!("{} by {} ({} tracks)", playlist.name, playlist.owner, playlist.total_tracks)).style(style)
-                }).collect()
+
+                    let name_str = if playlist.name.chars().count() > pl_name_width {
+                        let truncated: String = playlist.name.chars().take(pl_name_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = pl_name_width)
+                    } else {
+                        format!("{:<width$}", playlist.name, width = pl_name_width)
+                    };
+
+                    let owner_str = if playlist.owner.chars().count() > owner_width {
+                        let truncated: String = playlist.owner.chars().take(owner_width.saturating_sub(3)).collect();
+                        format!("{:<width$}", format!("{}...", truncated), width = owner_width)
+                    } else {
+                        format!("{:<width$}", playlist.owner, width = owner_width)
+                    };
+
+                    ListItem::new(format!(
+                        " {:<num_w$}   {}   {}   {:>tracks_w$}",
+                        i + 1, name_str, owner_str, playlist.total_tracks,
+                        num_w = pl_num_width,
+                        tracks_w = tracks_width
+                    )).style(style)
+                }).collect();
+
+                items.extend(playlist_items);
+                items
             }
         };
 
