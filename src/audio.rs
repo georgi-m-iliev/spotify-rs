@@ -31,7 +31,7 @@ pub struct AudioPlayer {
 }
 
 /// Wrapper for the audio backend
-/// The backend is created on startup but NOT activated until needed
+/// The backend is created on startup but not activated until needed
 /// This allows fast startup while preserving existing Spotify playback state
 pub struct AudioBackend {
     inner: Mutex<Option<AudioPlayer>>,
@@ -48,7 +48,6 @@ impl AudioPlayer {
         }
         tracing::debug!(device_name = DEVICE_NAME, "Creating audio player");
 
-        // Create session configuration
         let session_config = SessionConfig {
             device_id: Self::get_device_id(),
             ..Default::default()
@@ -56,13 +55,11 @@ impl AudioPlayer {
 
         let player_config = PlayerConfig {
             bitrate: Bitrate::Bitrate320,
-            // Enable position updates every 500ms for smooth progress tracking
             position_update_interval: Some(Duration::from_millis(500)),
             ..Default::default()
         };
         let audio_format = AudioFormat::default();
 
-        // Initial volume must match the default in model::PlaybackSettings
         let initial_volume = percent_to_librespot_volume(DEFAULT_VOLUME_PERCENT);
         let connect_config = ConnectConfig {
             name: DEVICE_NAME.to_string(),
@@ -73,7 +70,6 @@ impl AudioPlayer {
         let sink_builder = audio_backend::find(None).unwrap();
         let mixer_builder = mixer::find(None).unwrap();
 
-        // Clone cache so we can still use auth later
         let session = Session::new(session_config, Some(auth.cache.clone()));
 
         let mixer = mixer_builder(mixer_config)?;
@@ -85,7 +81,6 @@ impl AudioPlayer {
             move || sink_builder(None, audio_format),
         );
 
-        // Clone credentials so we can still use auth
         let credentials = auth.librespot_credentials.clone();
         let (spirc, spirc_task) = Spirc::new(
             connect_config,
@@ -96,7 +91,6 @@ impl AudioPlayer {
         )
         .await?;
 
-        // Only activate if requested
         let is_active = if activate {
             spirc.activate()?;
             tracing::debug!("Audio device activated");
@@ -132,13 +126,11 @@ impl AudioPlayer {
         Ok(())
     }
 
-    /// Get the player event channel for receiving playback state updates
     pub fn get_player_event_channel(&self) -> PlayerEventChannel {
         self.player.get_player_event_channel()
     }
 
     fn get_device_id() -> String {
-        // Generate a consistent device ID based on machine
         let hostname = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
@@ -163,7 +155,6 @@ impl AudioBackend {
         })
     }
 
-    /// Get the player event channel
     pub async fn get_player_event_channel(&self) -> Option<PlayerEventChannel> {
         let guard = self.inner.lock().await;
         guard.as_ref().map(|p| p.get_player_event_channel())
@@ -173,14 +164,12 @@ impl AudioBackend {
         AudioPlayer::get_device_name()
     }
 
-    /// Check if the audio backend is activated (available for Spotify Connect)
     pub async fn is_active(&self) -> bool {
         let guard = self.inner.lock().await;
         guard.as_ref().map(|p| p.is_active).unwrap_or(false)
     }
 
     /// Activate the local device (make it available for Spotify Connect)
-    /// This should be called when the user wants to play on the local device
     pub async fn activate(&self) -> Result<()> {
         let mut guard = self.inner.lock().await;
         if let Some(player) = guard.as_mut() {
@@ -189,7 +178,6 @@ impl AudioBackend {
         Ok(())
     }
 
-    /// Stop the local audio playback (used when switching to another device)
     pub async fn stop(&self) {
         let guard = self.inner.lock().await;
         if let Some(player) = guard.as_ref() {
@@ -198,7 +186,6 @@ impl AudioBackend {
     }
 
     /// Restart the audio backend (silently, for recovery)
-    /// Returns the player event channel for listening to playback events
     pub async fn restart(&self) -> Result<PlayerEventChannel> {
         tracing::info!("Restarting audio backend for recovery");
         // Drop the old player
@@ -223,7 +210,6 @@ impl AudioBackend {
         Ok(event_channel)
     }
 
-    /// Skip to the next track (used for auto-skip when a track is in the skip list)
     pub async fn skip_to_next(&self) -> Result<()> {
         let guard = self.inner.lock().await;
         if let Some(player) = guard.as_ref() {

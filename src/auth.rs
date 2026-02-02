@@ -110,7 +110,6 @@ pub async fn perform_oauth_flow() -> Result<AuthResult> {
 }
 
 /// Refresh the access token using the stored refresh token
-/// Returns (new_access_token, new_refresh_token, expires_at)
 pub async fn refresh_access_token(refresh_token: &str) -> Result<(String, String, chrono::DateTime<Utc>)> {
     tracing::debug!("Refreshing access token");
 

@@ -9,10 +9,11 @@ use tracing_subscriber::{
 
 const LOG_DIR: &str = ".logs";
 const LOG_FILE_PREFIX: &str = "spotify-rs";
+const LOG_FILE_SUFFIX: &str = "log";
 
 /// Initialize the logging system.
 ///
-/// Logs are written to `.logs/spotify-rs.YYYY-MM-DD.log` with daily rotation.
+/// Logs are written to `.logs/spotify-rs-YYYY-MM-DD.log` with daily rotation.
 /// The log level can be controlled via the `RUST_LOG` environment variable.
 ///
 /// Default log levels:
@@ -27,7 +28,11 @@ pub fn init_logging() -> anyhow::Result<()> {
     }
 
     // Create a daily rotating file appender
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, LOG_DIR, LOG_FILE_PREFIX);
+    let file_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix(LOG_FILE_PREFIX)
+        .filename_suffix(LOG_FILE_SUFFIX)
+        .build(LOG_DIR)?;
 
     // Create a non-blocking writer to avoid blocking the async runtime
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);

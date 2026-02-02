@@ -17,7 +17,6 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use rspotify::{clients::OAuthClient, AuthCodeSpotify, Config, Token};
-use tracing;
 
 use view::AppView;
 use audio::AudioBackend;
@@ -26,7 +25,6 @@ use model::{AppModel, SpotifyClient};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize file-based logging first
     if let Err(e) = logging::init_logging() {
         eprintln!("Warning: Failed to initialize logging: {}", e);
     }
@@ -36,7 +34,7 @@ async fn main() -> Result<()> {
     // Step 1: Get credentials
     let auth_result = auth::perform_oauth_flow().await?;
 
-    // Step 2: Authenticate with rspotify for API control (fast)
+    // Step 2: Authenticate with rspotify
     let rspotify_client = setup_rspotify(auth_result.rspotify_token.clone()).await?;
 
     match rspotify_client.me().await {
@@ -47,7 +45,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Create the SpotifyClient with our local device name for reference
+    // Create the SpotifyClient with our local device name
     let local_device_name = AudioBackend::get_device_name().to_string();
     let token_expires_at = auth_result.rspotify_token.expires_at;
     let spotify_client = SpotifyClient::new(
@@ -76,29 +74,24 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Initialize model
     let mut app_model = AppModel::new();
     app_model.set_spotify_client(spotify_client.clone());
 
     tracing::info!("Starting TUI...");
 
-    // Setup terminal FIRST - show UI immediately
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Wrap model in Arc<Mutex> for shared access
     let model = Arc::new(Mutex::new(app_model));
 
     // Set initial device name
     model.lock().await.update_device_name(local_device_name).await;
 
-    // Create a placeholder audio backend Arc that will be populated
     let audio_backend: Arc<Mutex<Option<AudioBackend>>> = Arc::new(Mutex::new(None));
 
-    // Clone for background initialization
     let audio_backend_init = audio_backend.clone();
     let auth_for_backend = auth_result.clone();
     let model_for_init = model.clone();
@@ -128,16 +121,13 @@ async fn main() -> Result<()> {
 
     let controller = AppController::new(model.clone(), audio_backend.clone());
 
-    // Load user's playlists (fast API call)
     controller.load_user_playlists().await;
 
-    // Check current playback state in background (don't block UI)
     let controller_for_init = controller.clone();
     tokio::spawn(async move {
         controller_for_init.initialize_playback().await;
     });
 
-    // Run the app
     let res = run_app(&mut terminal, model.clone(), controller).await;
 
     // Restore terminal
@@ -188,7 +178,6 @@ async fn run_app(
             let model_guard = model.lock().await;
             if let Some(spotify) = model_guard.get_spotify_client().await {
                 drop(model_guard);
-                // Spawn token refresh in background so it doesn't block UI
                 tokio::spawn(async move {
                     match spotify.refresh_token_if_needed().await {
                         Ok(_) => {},
