@@ -8,6 +8,7 @@ pub struct SearchTrack {
     pub id: String,
     pub name: String,
     pub artist: String,
+    pub artists: Vec<String>,
     pub album: String,
     pub duration_ms: u32,
     pub uri: String,

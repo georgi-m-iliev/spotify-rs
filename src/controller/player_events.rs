@@ -48,22 +48,24 @@ impl AppController {
                         model_guard.update_playback_position(position_ms, is_playing).await;
                     }
                     PlayerEvent::TrackChanged { audio_item } => {
-                        let (artist, album) = match &audio_item.unique_fields {
-                            UniqueFields::Track { artists, album, .. } => {
-                                let artist_name = artists
+                        let (artist, artists, album) = match &audio_item.unique_fields {
+                            UniqueFields::Track { artists: artist_list, album, .. } => {
+                                let artist_name = artist_list
                                     .0
                                     .first()
                                     .map(|a| a.name.clone())
                                     .unwrap_or_default();
-                                (artist_name, album.clone())
+                                let all_artists: Vec<String> = artist_list.0.iter().map(|a| a.name.clone()).collect();
+                                (artist_name, all_artists, album.clone())
                             }
                             UniqueFields::Episode { show_name, .. } => {
-                                (show_name.clone(), "Podcast".to_string())
+                                (show_name.clone(), vec![show_name.clone()], "Podcast".to_string())
                             }
-                            UniqueFields::Local { artists, album, .. } => {
-                                let artist_name = artists.clone().unwrap_or_default();
+                            UniqueFields::Local { artists: artist_opt, album, .. } => {
+                                let artist_name = artist_opt.clone().unwrap_or_default();
+                                let all_artists = vec![artist_name.clone()];
                                 let album_name = album.clone().unwrap_or_default();
-                                (artist_name, album_name)
+                                (artist_name, all_artists, album_name)
                             }
                         };
 
@@ -101,6 +103,7 @@ impl AppController {
                         let track = TrackMetadata {
                             name: audio_item.name.clone(),
                             artist,
+                            artists,
                             album,
                             duration_ms: audio_item.duration_ms,
                             uri,

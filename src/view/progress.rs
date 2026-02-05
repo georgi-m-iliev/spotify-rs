@@ -18,16 +18,24 @@ pub fn render_progress_bar(
 ) {
     let status_text = if playback.track.name == "No track playing" {
         " No track playing".to_string()
-    } else if playback.is_playing {
-        format!(
-            " ▶ {} | {} ({})",
-            playback.track.name, playback.track.artist, playback.track.album
-        )
     } else {
-        format!(
-            "⏸  {} | {} ({})",
-            playback.track.name, playback.track.artist, playback.track.album
-        )
+        let artists_display = if playback.track.artists.len() > 1 {
+            playback.track.artists.join(", ")
+        } else {
+            playback.track.artist.clone()
+        };
+
+        if playback.is_playing {
+            format!(
+                " ▶ {} | {} ({})",
+                playback.track.name, artists_display, playback.track.album
+            )
+        } else {
+            format!(
+                "⏸  {} | {} ({})",
+                playback.track.name, artists_display, playback.track.album
+            )
+        }
     };
 
     let shuffle_text = if playback.settings.shuffle { "Shuffle: On" } else { "Shuffle: Off" };

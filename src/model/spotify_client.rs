@@ -327,11 +327,13 @@ impl SpotifyClient {
         if let Ok(rspotify::model::SearchResult::Tracks(page)) = track_result {
             for track in page.items {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                 results.tracks.push(SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
                     name: track.name,
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artists: all_artists,
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
                     liked: false, // Set by mark_tracks_liked() in controller
@@ -390,11 +392,13 @@ impl SpotifyClient {
         // Album tracks are included in the full album response
         for track in album.tracks.items.iter() {
             let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+            let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
             tracks.push(SearchTrack {
                 uri: format!("spotify:track:{}", track_id),
                 id: track_id,
                 name: track.name.clone(),
                 artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                artists: all_artists,
                 album: album.name.clone(),
                 duration_ms: track.duration.num_milliseconds() as u32,
                 liked: false, // Set by mark_tracks_liked() in controller
@@ -438,11 +442,13 @@ impl SpotifyClient {
         for item in items.iter() {
             if let Some(PlayableItem::Track(track)) = &item.track {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                 tracks.push(SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
                     name: track.name.clone(),
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artists: all_artists,
                     album: track.album.name.clone(),
                     duration_ms: track.duration.num_milliseconds() as u32,
                     liked: false, // Set by mark_tracks_liked() in controller
@@ -487,11 +493,13 @@ impl SpotifyClient {
         for item in items.iter() {
             if let Some(PlayableItem::Track(track)) = &item.track {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                 tracks.push(SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
                     name: track.name.clone(),
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artists: all_artists,
                     album: track.album.name.clone(),
                     duration_ms: track.duration.num_milliseconds() as u32,
                     liked: false, // Set by mark_tracks_liked() in controller
@@ -520,11 +528,13 @@ impl SpotifyClient {
             .into_iter()
             .map(|track| {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                 SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
                     name: track.name,
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artists: all_artists,
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
                     liked: false, // Set by mark_tracks_liked() in controller
@@ -607,11 +617,13 @@ impl SpotifyClient {
                 PlayableItem::Track(track) => {
                     let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                     if !track_id.is_empty() {
+                        let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                         Some(SearchTrack {
                             id: track_id.clone(),
                             uri: format!("spotify:track:{}", track_id),
                             name: track.name.clone(),
                             artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                            artists: all_artists,
                             album: track.album.name.clone(),
                             duration_ms: track.duration.num_milliseconds() as u32,
                             liked: self.liked_songs_cache.is_liked(&track_id).await,
@@ -632,11 +644,13 @@ impl SpotifyClient {
             if let PlayableItem::Track(track) = item {
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
                 if !track_id.is_empty() {
+                    let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                     queue_tracks.push(SearchTrack {
                         id: track_id.clone(),
                         uri: format!("spotify:track:{}", track_id),
                         name: track.name.clone(),
                         artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                        artists: all_artists,
                         album: track.album.name.clone(),
                         duration_ms: track.duration.num_milliseconds() as u32,
                         liked: self.liked_songs_cache.is_liked(&track_id).await,
@@ -695,11 +709,13 @@ impl SpotifyClient {
             .map(|saved| {
                 let track = saved.track;
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                 SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
                     name: track.name,
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artists: all_artists,
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
                     liked: true, // These are liked songs by definition
@@ -766,11 +782,13 @@ impl SpotifyClient {
             .map(|item| {
                 let track = item.track;
                 let track_id = track.id.as_ref().map(|id| id.id().to_string()).unwrap_or_default();
+                let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
                 SearchTrack {
                     uri: format!("spotify:track:{}", track_id),
                     id: track_id,
                     name: track.name,
                     artist: track.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artists: all_artists,
                     album: track.album.name,
                     duration_ms: track.duration.num_milliseconds() as u32,
                     liked: false, // Set by mark_tracks_liked() in controller

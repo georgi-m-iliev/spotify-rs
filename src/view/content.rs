@@ -317,7 +317,12 @@ fn render_track_items(
         let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
         let title_str = truncate_string(&track.name, title_width);
-        let artist_str = truncate_string(&track.artist, artist_width);
+        let artists_display = if track.artists.len() > 1 {
+            track.artists.join(", ")
+        } else {
+            track.artist.clone()
+        };
+        let artist_str = truncate_string(&artists_display, artist_width);
 
         ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
     }).collect();
@@ -835,11 +840,16 @@ fn render_queue(
 
     let cp_text = if let Some(track) = currently_playing {
         let liked = if track.liked { "💚 " } else { "" };
+        let artists_display = if track.artists.len() > 1 {
+            track.artists.join(", ")
+        } else {
+            track.artist.clone()
+        };
         format!(
             "{}{}  -  {} ({})",
             liked,
             track.name,
-            track.artist,
+            artists_display,
             track.album,
         )
     } else {
@@ -920,7 +930,12 @@ fn render_detail_track_items(
             let track_num = format!("{}{:<num_width$}", playing_indicator, i + 1, num_width = num_width);
 
             let title_str = truncate_string(&track.name, title_width);
-            let artist_str = truncate_string(&track.artist, artist_width);
+            let artists_display = if track.artists.len() > 1 {
+                track.artists.join(", ")
+            } else {
+                track.artist.clone()
+            };
+            let artist_str = truncate_string(&artists_display, artist_width);
 
             ListItem::new(format!("{}   {}   {}   {}   {}", track_num, liked_indicator, title_str, artist_str, duration)).style(style)
         })

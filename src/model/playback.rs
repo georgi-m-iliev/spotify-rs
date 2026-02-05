@@ -12,6 +12,7 @@ use super::types::RepeatState;
 pub struct TrackMetadata {
     pub name: String,
     pub artist: String,
+    pub artists: Vec<String>,
     pub album: String,
     pub duration_ms: u32,
     pub uri: String,
@@ -22,6 +23,7 @@ impl Default for TrackMetadata {
         Self {
             name: "No track playing".to_string(),
             artist: String::new(),
+            artists: Vec::new(),
             album: String::new(),
             duration_ms: 0,
             uri: String::new(),
@@ -39,6 +41,8 @@ impl TrackMetadata {
                         .first()
                         .map(|a| a.name.clone())
                         .unwrap_or_default();
+                    
+                    let all_artists: Vec<String> = track.artists.iter().map(|a| a.name.clone()).collect();
 
                     let uri = track.id.as_ref()
                         .map(|id| format!("spotify:track:{}", id.id()))
@@ -47,6 +51,7 @@ impl TrackMetadata {
                     Self {
                         name: track.name.clone(),
                         artist,
+                        artists: all_artists,
                         album: track.album.name.clone(),
                         duration_ms: track.duration.num_milliseconds() as u32,
                         uri,
@@ -57,6 +62,7 @@ impl TrackMetadata {
                     Self {
                         name: episode.name.clone(),
                         artist: episode.show.name.clone(),
+                        artists: vec![episode.show.name.clone()],
                         album: "Podcast".to_string(),
                         duration_ms: episode.duration.num_milliseconds() as u32,
                         uri,

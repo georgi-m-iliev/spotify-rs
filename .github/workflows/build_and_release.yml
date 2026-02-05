@@ -1,7 +1,14 @@
 name: Build and release
 on:
   push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
   pull_request:
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -148,6 +155,6 @@ jobs:
       - name: List
         run: find ./artifacts
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ./artifacts/*.tar.gz
